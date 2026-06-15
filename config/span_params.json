@@ -1,0 +1,37 @@
+{
+  "scanning_ranges": {
+    "equity":            0.10,
+    "equity_futures":    0.08,
+    "equity_options":    0.15,
+    "commodity_futures": 0.12,
+    "crypto":            0.20,
+    "fixed_income":      0.03,
+    "fx":                0.05
+  },
+  "spread_credits": {
+    "ES_NQ":  0.70,
+    "ES_YM":  0.75,
+    "GC_SI":  0.70,
+    "CL_HO":  0.80,
+    "ZN_ZB":  0.85,
+    "BTC_ETH": 0.65
+  },
+  "short_option_minimum": {
+    "equity_options":    50,
+    "commodity_options": 75,
+    "crypto_options":   100
+  },
+  "asset_class_map": {
+    "ES":  "equity_futures",
+    "NQ":  "equity_futures",
+    "YM":  "equity_futures",
+    "CL":  "commodity_futures",
+    "GC":  "commodity_futures",
+    "SI":  "commodity_futures",
+    "HO":  "commodity_futures",
+    "ZN":  "fixed_income",
+    "ZB":  "fixed_income",
+    "BTC": "crypto",
+    "ETH": "crypto"
+  }
+}
