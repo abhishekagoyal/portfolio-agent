@@ -4,14 +4,13 @@ import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import plotly.express as px
-import plotly.graph_objects as go
 import pandas as pd
 
 from core.portfolio import calculate_portfolio_summary, calculate_pnl, get_position_weights
 from utils.s3 import load_positions, load_span_results
 
 st.set_page_config(page_title='Portfolio Overview', page_icon='📊', layout='wide')
-st.title('📊 Portfolio Overview')
+st.title('Portfolio Overview')
 
 if 'positions' not in st.session_state:
     st.session_state.positions = load_positions()
@@ -29,9 +28,9 @@ weighted = get_position_weights(st.session_state.positions)
 st.subheader('Portfolio Summary')
 col1, col2, col3, col4, col5 = st.columns(5)
 with col1:
-    st.metric('Total Market Value', f"")
+    st.metric('Total Market Value', '$' + '{:,.2f}'.format(summary['total_market_value']))
 with col2:
-    st.metric('Total P&L', f"", delta=f"")
+    st.metric('Total P&L', '$' + '{:,.2f}'.format(summary['total_pnl']))
 with col3:
     st.metric('Positions', summary['num_positions'])
 with col4:
@@ -45,12 +44,14 @@ if st.session_state.span_results:
     col1, col2, col3 = st.columns(3)
     span = st.session_state.span_results
     with col1:
-        st.metric('Net Margin Requirement', f"")
+        st.metric('Net Margin Requirement', '$' + '{:,.2f}'.format(span.get('net_margin_requirement', 0)))
     with col2:
-        st.metric('Spread Credits', f"")
+        st.metric('Spread Credits', '$' + '{:,.2f}'.format(span.get('total_spread_credits', 0)))
     with col3:
-        utilization = (span.get('net_margin_requirement', 0) / summary['total_market_value'] * 100) if summary['total_market_value'] else 0
-        st.metric('Margin Utilization', f"{utilization:.1f}%")
+        total_val = summary['total_market_value']
+        margin = span.get('net_margin_requirement', 0)
+        utilization = (margin / total_val * 100) if total_val > 0 else 0
+        st.metric('Margin Utilization', '{:.1f}'.format(utilization) + '%')
 
 st.markdown('---')
 st.subheader('Position Details')
@@ -68,26 +69,14 @@ with col1:
     st.subheader('Portfolio Weights')
     weights_df = pd.DataFrame(weighted)
     if not weights_df.empty and 'weight_pct' in weights_df.columns:
-        fig = px.pie(
-            weights_df,
-            values='weight_pct',
-            names='symbol',
-            title='Position Weights (%)'
-        )
+        fig = px.pie(weights_df, values='weight_pct', names='symbol', title='Position Weights (%)')
         st.plotly_chart(fig, use_container_width=True)
 
 with col2:
     st.subheader('P&L by Position')
     pnl_df = pd.DataFrame(enriched)
     if not pnl_df.empty:
-        fig2 = px.bar(
-            pnl_df,
-            x='symbol',
-            y='pnl',
-            title='P&L by Position ($)',
-            color='pnl',
-            color_continuous_scale=['red', 'green']
-        )
+        fig2 = px.bar(pnl_df, x='symbol', y='pnl', title='P&L by Position ($)', color='pnl', color_continuous_scale=['red', 'green'])
         st.plotly_chart(fig2, use_container_width=True)
 
-st.caption(f"Last updated: {summary['as_of']}")
+st.caption('Last updated: ' + summary['as_of'])
