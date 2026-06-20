@@ -2,7 +2,7 @@ import sqlite3
 import os
 from datetime import datetime
 
-DB_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "security_master.db")
+DB_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "trading.db")
 
 def get_connection():
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
@@ -21,30 +21,19 @@ def init_db():
             exchange            TEXT,
             currency            TEXT DEFAULT 'USD',
             status              TEXT DEFAULT 'active',
-
-            -- futures
             cme_product_code    TEXT,
             contract_size       REAL,
             tick_size           REAL,
             tick_value          REAL,
             expiry              TEXT,
-
-            -- options
             underlying_symbol   TEXT,
             strike              REAL,
             option_right        TEXT,
             multiplier          REAL,
-
-            -- margin
             margin_method       TEXT,
-
-            -- ibkr
             conid               INTEGER,
-
-            -- metadata
             created_at          TEXT,
             updated_at          TEXT,
-
             UNIQUE(symbol, asset_class, expiry, strike, option_right)
         )
     """)
@@ -52,7 +41,6 @@ def init_db():
     conn.close()
 
 def add_instrument(data: dict) -> tuple[bool, str]:
-    """Add a new instrument. Returns (success, message)."""
     try:
         conn = get_connection()
         now = datetime.utcnow().isoformat()
@@ -69,25 +57,25 @@ def add_instrument(data: dict) -> tuple[bool, str]:
                 :margin_method, :conid, :created_at, :updated_at
             )
         """, {
-            "symbol":           data.get("symbol", "").upper(),
-            "name":             data.get("name"),
-            "asset_class":      data.get("asset_class"),
-            "exchange":         data.get("exchange"),
-            "currency":         data.get("currency", "USD"),
-            "status":           data.get("status", "active"),
-            "cme_product_code": data.get("cme_product_code"),
-            "contract_size":    data.get("contract_size"),
-            "tick_size":        data.get("tick_size"),
-            "tick_value":       data.get("tick_value"),
-            "expiry":           data.get("expiry"),
-            "underlying_symbol":data.get("underlying_symbol"),
-            "strike":           data.get("strike"),
-            "option_right":     data.get("option_right"),
-            "multiplier":       data.get("multiplier"),
-            "margin_method":    data.get("margin_method"),
-            "conid":            data.get("conid"),
-            "created_at":       now,
-            "updated_at":       now,
+            "symbol":            data.get("symbol", "").upper(),
+            "name":              data.get("name"),
+            "asset_class":       data.get("asset_class"),
+            "exchange":          data.get("exchange"),
+            "currency":          data.get("currency", "USD"),
+            "status":            data.get("status", "active"),
+            "cme_product_code":  data.get("cme_product_code"),
+            "contract_size":     data.get("contract_size"),
+            "tick_size":         data.get("tick_size"),
+            "tick_value":        data.get("tick_value"),
+            "expiry":            data.get("expiry"),
+            "underlying_symbol": data.get("underlying_symbol"),
+            "strike":            data.get("strike"),
+            "option_right":      data.get("option_right"),
+            "multiplier":        data.get("multiplier"),
+            "margin_method":     data.get("margin_method"),
+            "conid":             data.get("conid"),
+            "created_at":        now,
+            "updated_at":        now,
         })
         conn.commit()
         conn.close()
@@ -98,7 +86,6 @@ def add_instrument(data: dict) -> tuple[bool, str]:
         return False, f"Error: {str(e)}"
 
 def search_instruments(query: str = "", asset_class: str = "All") -> list[dict]:
-    """Search instruments by symbol/name and optionally filter by asset class."""
     conn = get_connection()
     sql = "SELECT * FROM instruments WHERE status = 'active'"
     params = []
@@ -114,7 +101,6 @@ def search_instruments(query: str = "", asset_class: str = "All") -> list[dict]:
     return [dict(r) for r in rows]
 
 def get_instrument(symbol: str, asset_class: str = None) -> dict | None:
-    """Get a single instrument by symbol (and optionally asset class)."""
     conn = get_connection()
     if asset_class:
         row = conn.execute(
@@ -130,7 +116,6 @@ def get_instrument(symbol: str, asset_class: str = None) -> dict | None:
     return dict(row) if row else None
 
 def update_instrument(id: int, data: dict) -> tuple[bool, str]:
-    """Update an existing instrument by id."""
     try:
         conn = get_connection()
         data["updated_at"] = datetime.utcnow().isoformat()
@@ -144,7 +129,6 @@ def update_instrument(id: int, data: dict) -> tuple[bool, str]:
         return False, str(e)
 
 def deactivate_instrument(id: int) -> tuple[bool, str]:
-    """Soft delete — sets status to inactive."""
     try:
         conn = get_connection()
         conn.execute(
@@ -166,25 +150,20 @@ def get_all_asset_classes() -> list[str]:
     return [r["asset_class"] for r in rows]
 
 def seed_default_instruments():
-    """Seed commonly used instruments so the db isn't empty on first run."""
     defaults = [
-        # Equities
-        {"symbol": "AAPL",  "name": "Apple Inc",               "asset_class": "STK",    "exchange": "NASDAQ", "margin_method": "REGT",        "currency": "USD"},
-        {"symbol": "MSFT",  "name": "Microsoft Corp",           "asset_class": "STK",    "exchange": "NASDAQ", "margin_method": "REGT",        "currency": "USD"},
-        {"symbol": "SPY",   "name": "SPDR S&P 500 ETF",         "asset_class": "STK",    "exchange": "NYSE",   "margin_method": "REGT",        "currency": "USD"},
-        {"symbol": "QQQ",   "name": "Invesco QQQ Trust",        "asset_class": "STK",    "exchange": "NASDAQ", "margin_method": "REGT",        "currency": "USD"},
-        # Futures
-        {"symbol": "ES",    "name": "E-mini S&P 500 Futures",   "asset_class": "FUT",    "exchange": "CME",    "margin_method": "SPAN",        "currency": "USD", "cme_product_code": "ES",  "contract_size": 50,   "tick_size": 0.25, "tick_value": 12.5},
-        {"symbol": "NQ",    "name": "E-mini NASDAQ 100 Futures", "asset_class": "FUT",    "exchange": "CME",    "margin_method": "SPAN",        "currency": "USD", "cme_product_code": "NQ",  "contract_size": 20,   "tick_size": 0.25, "tick_value": 5.0},
-        {"symbol": "GC",    "name": "Gold Futures",              "asset_class": "FUT",    "exchange": "COMEX",  "margin_method": "SPAN",        "currency": "USD", "cme_product_code": "GC",  "contract_size": 100,  "tick_size": 0.10, "tick_value": 10.0},
-        {"symbol": "CL",    "name": "Crude Oil Futures",         "asset_class": "FUT",    "exchange": "NYMEX",  "margin_method": "SPAN",        "currency": "USD", "cme_product_code": "CL",  "contract_size": 1000, "tick_size": 0.01, "tick_value": 10.0},
-        {"symbol": "ZB",    "name": "US Treasury Bond Futures",  "asset_class": "FUT",    "exchange": "CBOT",   "margin_method": "SPAN",        "currency": "USD", "cme_product_code": "ZB",  "contract_size": 100000, "tick_size": 0.03125, "tick_value": 31.25},
-        # Crypto
-        {"symbol": "BTC",   "name": "Bitcoin",                   "asset_class": "CRYPTO", "exchange": "IBKR",   "margin_method": "IBKR",        "currency": "USD"},
-        {"symbol": "ETH",   "name": "Ethereum",                  "asset_class": "CRYPTO", "exchange": "IBKR",   "margin_method": "IBKR",        "currency": "USD"},
+        {"symbol": "AAPL", "name": "Apple Inc",                "asset_class": "STK",    "exchange": "NASDAQ", "margin_method": "REGT", "currency": "USD"},
+        {"symbol": "MSFT", "name": "Microsoft Corp",            "asset_class": "STK",    "exchange": "NASDAQ", "margin_method": "REGT", "currency": "USD"},
+        {"symbol": "SPY",  "name": "SPDR S&P 500 ETF",          "asset_class": "STK",    "exchange": "NYSE",   "margin_method": "REGT", "currency": "USD"},
+        {"symbol": "QQQ",  "name": "Invesco QQQ Trust",         "asset_class": "STK",    "exchange": "NASDAQ", "margin_method": "REGT", "currency": "USD"},
+        {"symbol": "ES",   "name": "E-mini S&P 500 Futures",    "asset_class": "FUT",    "exchange": "CME",    "margin_method": "SPAN", "currency": "USD", "cme_product_code": "ES",  "contract_size": 50,     "tick_size": 0.25,    "tick_value": 12.5},
+        {"symbol": "NQ",   "name": "E-mini NASDAQ 100 Futures", "asset_class": "FUT",    "exchange": "CME",    "margin_method": "SPAN", "currency": "USD", "cme_product_code": "NQ",  "contract_size": 20,     "tick_size": 0.25,    "tick_value": 5.0},
+        {"symbol": "GC",   "name": "Gold Futures",              "asset_class": "FUT",    "exchange": "COMEX",  "margin_method": "SPAN", "currency": "USD", "cme_product_code": "GC",  "contract_size": 100,    "tick_size": 0.10,    "tick_value": 10.0},
+        {"symbol": "CL",   "name": "Crude Oil Futures",         "asset_class": "FUT",    "exchange": "NYMEX",  "margin_method": "SPAN", "currency": "USD", "cme_product_code": "CL",  "contract_size": 1000,   "tick_size": 0.01,    "tick_value": 10.0},
+        {"symbol": "ZB",   "name": "US Treasury Bond Futures",  "asset_class": "FUT",    "exchange": "CBOT",   "margin_method": "SPAN", "currency": "USD", "cme_product_code": "ZB",  "contract_size": 100000, "tick_size": 0.03125, "tick_value": 31.25},
+        {"symbol": "BTC",  "name": "Bitcoin",                   "asset_class": "CRYPTO", "exchange": "IBKR",   "margin_method": "IBKR", "currency": "USD"},
+        {"symbol": "ETH",  "name": "Ethereum",                  "asset_class": "CRYPTO", "exchange": "IBKR",   "margin_method": "IBKR", "currency": "USD"},
     ]
     for inst in defaults:
-        add_instrument(inst)  # silently skips if already exists
+        add_instrument(inst)
 
-# Initialise on import
 init_db()

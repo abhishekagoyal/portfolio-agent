@@ -2,22 +2,14 @@ import sqlite3
 import os
 from datetime import datetime
 
-DB_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "security_master.db")
+DB_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "trading.db")
 
-# ── Default haircut rules ────────────────────────────────────────────────
 HAIRCUT_RULES = {
-    "CASH":      {"USD": 0.0,  "NON_USD": 2.0},
+    "CASH":      {"USD": 0.0,   "NON_USD": 2.0},
     "STK":       {"default": 10.0},
     "ETF":       {"default": 10.0},
-    "BOND":      {
-        "TREASURY_SHORT":  0.5,   # <1yr
-        "TREASURY_MED":    1.0,   # 1-3yr
-        "TREASURY_LONG":   2.0,   # 3-7yr
-        "TREASURY_XLONG":  4.0,   # 7yr+
-        "IG_CORP":         8.0,
-        "HY_CORP":        15.0,
-        "default":         5.0,   # fallback
-    },
+    "BOND":      {"TREASURY_SHORT": 0.5, "TREASURY_MED": 1.0, "TREASURY_LONG": 2.0,
+                  "TREASURY_XLONG": 4.0, "IG_CORP": 8.0, "HY_CORP": 15.0, "default": 5.0},
     "COMMODITY": {"GOLD": 15.0, "SILVER": 15.0, "default": 25.0},
     "CRYPTO":    {"BTC": 35.0,  "ETH": 35.0,    "default": 50.0},
 }
@@ -152,16 +144,9 @@ def remove_collateral(id: int) -> tuple[bool, str]:
 def get_collateral_summary() -> dict:
     items = get_collateral()
     if not items:
-        return {
-            "total_market_value": 0,
-            "total_collateral_value": 0,
-            "by_asset_class": {},
-            "items": []
-        }
-
-    total_mv  = sum(i["market_value"]     for i in items)
-    total_cv  = sum(i["collateral_value"] for i in items)
-
+        return {"total_market_value": 0, "total_collateral_value": 0, "by_asset_class": {}, "items": []}
+    total_mv = sum(i["market_value"]     for i in items)
+    total_cv = sum(i["collateral_value"] for i in items)
     by_class = {}
     for i in items:
         ac = i["asset_class"]
@@ -170,7 +155,6 @@ def get_collateral_summary() -> dict:
         by_class[ac]["market_value"]     += i["market_value"]
         by_class[ac]["collateral_value"] += i["collateral_value"]
         by_class[ac]["count"]            += 1
-
     return {
         "total_market_value":     round(total_mv, 2),
         "total_collateral_value": round(total_cv, 2),
@@ -179,5 +163,4 @@ def get_collateral_summary() -> dict:
         "items":                  items,
     }
 
-# Initialise on import
 init_collateral_db()
