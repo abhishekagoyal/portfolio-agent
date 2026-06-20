@@ -192,3 +192,81 @@ if st.session_state.webull_raw:
                 st.rerun()
             else:
                 st.error("Set at least one quantity above.")
+
+st.markdown("---")
+
+# ── SECTION 4: PRE-TRADE MARGIN CHECKER (IBKR) ─────────────────────────
+st.subheader("Section 4 — Pre-Trade Margin Checker")
+st.caption("Uses IBKR paper account to calculate real margin impact before placing a trade.")
+
+wi_col1, wi_col2, wi_col3, wi_col4 = st.columns(4)
+with wi_col1:
+    wi_symbol = st.text_input("Symbol", placeholder="AAPL, MSFT...", key="wi_symbol").upper()
+with wi_col2:
+    wi_quantity = st.number_input("Quantity", min_value=1, value=10, step=1, key="wi_qty")
+with wi_col3:
+    wi_side = st.selectbox("Side", ["BUY", "SELL"], key="wi_side")
+with wi_col4:
+    wi_order_type = st.selectbox("Order Type", ["MKT", "LMT"], key="wi_order_type")
+
+wi_limit_price = 0.0
+if wi_order_type == "LMT":
+    wi_limit_price = st.number_input("Limit Price", min_value=0.01, value=100.0, step=0.01, key="wi_limit_price")
+
+if st.button("🔍 Check Margin Impact", type="primary", key="wi_check"):
+    if not wi_symbol:
+        st.error("Please enter a symbol.")
+    else:
+        with st.spinner(f"Checking margin impact for {wi_side} {wi_quantity} {wi_symbol}..."):
+            try:
+                from utils.ibkr import whatif_order
+                result = whatif_order(wi_symbol, wi_quantity, wi_order_type, wi_side, wi_limit_price)
+
+                if result.get("error"):
+                    st.error(f"IBKR error: {result['error']}")
+                else:
+                    st.success("Margin check complete!")
+
+                    r1, r2, r3, r4, r5 = st.columns(5)
+                    with r1:
+                        st.metric("Trade Amount",
+                                  f"${result['trade_amount']:,.2f}" if result.get("trade_amount") else "N/A")
+                    with r2:
+                        st.metric("Margin Impact",
+                                  f"${result['margin_impact']:,.2f}" if result.get("margin_impact") else "N/A",
+                                  help="Initial margin added by this trade")
+                    with r3:
+                        st.metric("Initial Margin (after)",
+                                  f"${result['initial_margin']:,.2f}" if result.get("initial_margin") else "N/A")
+                    with r4:
+                        st.metric("Maintenance Margin (after)",
+                                  f"${result['maintenance_margin']:,.2f}" if result.get("maintenance_margin") else "N/A")
+                    with r5:
+                        st.metric("Commission",
+                                  f"${result['commission']:,.2f}" if result.get("commission") else "N/A")
+
+                    # Buying power impact
+                    cf  = result.get("current_funds")
+                    ptf = result.get("post_trade_funds")
+                    if cf is not None and ptf is not None:
+                        bp_change = ptf - cf
+                        color = "#cc3300" if bp_change < 0 else "#1a9e3f"
+                        st.markdown(
+                            f'<div style="padding:10px 14px;border-radius:6px;background:#1e1e1e;'
+                            f'border-left:4px solid {color};margin-top:12px;">'
+                            f'<span style="color:#aaa;font-size:13px;">Buying Power</span>&nbsp;&nbsp;'
+                            f'<span style="color:#fff;font-size:15px;">${cf:,.2f}</span>'
+                            f'<span style="color:#aaa;font-size:13px;"> → </span>'
+                            f'<span style="color:{color};font-size:15px;font-weight:600;">${ptf:,.2f}</span>'
+                            f'&nbsp;<span style="color:{color};font-size:13px;">({bp_change:+,.2f})</span>'
+                            f'</div>',
+                            unsafe_allow_html=True
+                        )
+
+                    if result.get("warnings"):
+                        for w in result["warnings"]:
+                            st.warning(w)
+
+            except Exception as e:
+                st.error(f"Could not connect to IBKR gateway: {str(e)}")
+                st.info("Make sure the IBKR Client Portal Gateway is running on localhost:5000")
