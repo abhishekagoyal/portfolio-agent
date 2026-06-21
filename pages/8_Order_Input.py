@@ -22,11 +22,14 @@ def positions_to_span_format(positions: list) -> list:
     """Convert position store records to the format span engine expects."""
     span_positions = []
     for p in positions:
+        # side can be LONG/SHORT (manual) or BUY/SELL (order_input) — normalise both
+        side = p.get("side", "LONG").upper()
+        is_long = side in ("LONG", "BUY")
         span_positions.append({
             "symbol":          p["symbol"],
-            "quantity":        p["quantity"] if p["side"] == "LONG" else -p["quantity"],
+            "quantity":        p["quantity"] if is_long else -p["quantity"],
             "price":           p["current_price"] or p["entry_price"],
-            "is_short_option": p.get("option_right") is not None and p["side"] == "SHORT",
+            "is_short_option": p.get("option_right") is not None and not is_long,
         })
     return span_positions
 
@@ -102,7 +105,7 @@ def calculate_pretrade_margin_impact(
 
         # Net position after trade
         existing_qty = sum(
-            (p["quantity"] if p.get("side", "LONG") == "LONG" else -p["quantity"])
+            (p["quantity"] if p.get("side", "LONG").upper() in ("LONG", "BUY") else -p["quantity"])
             for p in existing_positions if p["symbol"] == symbol
         )
         net_qty = existing_qty + (quantity if side == "BUY" else -quantity)
