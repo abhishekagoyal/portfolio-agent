@@ -16,92 +16,171 @@ st.set_page_config(page_title="Order Input", page_icon="🎯", layout="wide")
 st.title("🎯 Order Input — Pre-Trade Margin Check")
 st.caption("Select an instrument, enter order details, and check margin impact before trading.")
 
-# ── Helper: margin engine ────────────────────────────────────────────────
-def calculate_pretrade_margin(symbol: str, asset_class: str, quantity: float,
-                               side: str, price: float,
-                               option_right: str = None,
-                               is_short_option: bool = False) -> dict:
-    """
-    Run pre-trade margin calculation based on asset class.
-    Returns a dict with initial_margin, maintenance_margin, method, calc_detail.
-    """
-    params     = load_span_params()
-    position_value = quantity * price
 
-    # ── FUTURES ──────────────────────────────────────────────────────────
+# ── Helper: convert position store format to span engine format ──────────
+def positions_to_span_format(positions: list) -> list:
+    """Convert position store records to the format span engine expects."""
+    span_positions = []
+    for p in positions:
+        span_positions.append({
+            "symbol":          p["symbol"],
+            "quantity":        p["quantity"] if p["side"] == "LONG" else -p["quantity"],
+            "price":           p["current_price"] or p["entry_price"],
+            "is_short_option": p.get("option_right") is not None and p["side"] == "SHORT",
+        })
+    return span_positions
+
+
+def net_positions(existing: list, new_symbol: str, new_qty_signed: float,
+                  new_price: float) -> list:
+    """
+    Merge a new order into existing positions.
+    new_qty_signed: positive = BUY, negative = SELL
+    Returns combined list with quantities netted for same symbol.
+    """
+    combined = {p["symbol"]: dict(p) for p in existing}
+
+    if new_symbol in combined:
+        existing_qty = combined[new_symbol]["quantity"]
+        combined[new_symbol]["quantity"] = existing_qty + new_qty_signed
+        combined[new_symbol]["price"]    = new_price
+        # Remove if flat
+        if combined[new_symbol]["quantity"] == 0:
+            del combined[new_symbol]
+    else:
+        combined[new_symbol] = {
+            "symbol":          new_symbol,
+            "quantity":        new_qty_signed,
+            "price":           new_price,
+            "is_short_option": False,
+        }
+
+    return list(combined.values())
+
+
+def calculate_pretrade_margin_impact(
+    symbol: str, asset_class: str, quantity: float,
+    side: str, price: float,
+    option_right: str = None,
+    is_short_option: bool = False,
+    existing_positions: list = None
+) -> dict:
+    """
+    Calculate the MARGINAL margin impact of a new order against the existing portfolio.
+
+    For futures: runs SPAN on combined portfolio (existing + new order netted),
+    returns the difference vs current portfolio margin.
+
+    For equities/crypto/bonds: calculates Reg T on the new order in isolation
+    (netting doesn't apply under Reg T framework).
+    """
+    params = load_span_params()
+    existing_positions = existing_positions or []
+    position_value     = quantity * price
+
+    # ── FUTURES — portfolio netting ──────────────────────────────────────
     if asset_class == "FUT":
-        prod = params.get("product_margins", {}).get(symbol.upper())
-        if prod:
-            im   = prod["initial_margin"]     * quantity
-            mm   = prod["maintenance_margin"] * quantity
-            detail = (f"{quantity:.0f} contracts × "
-                      f"${prod['initial_margin']:,} = ${im:,.2f} initial | "
-                      f"${prod['maintenance_margin']:,} = ${mm:,.2f} maint.")
-            method = "SPAN (per-contract)"
-        else:
-            ac_map  = params.get("asset_class_map", {})
-            ac_key  = ac_map.get(symbol.upper(), "equity_futures")
-            fallback = params.get("fallback_scanning_ranges", {}).get(ac_key, 0.08)
-            im      = abs(position_value) * fallback
-            mm      = im * 0.90
-            detail  = f"${abs(position_value):,.2f} × {fallback:.0%} = ${im:,.2f} (fallback — add to SPAN params for exact rate)"
-            method  = "SPAN (fallback %)"
-        return {"initial_margin": round(im, 2), "maintenance_margin": round(mm, 2),
-                "method": method, "calc_detail": detail}
+        # Current portfolio margin
+        current_span  = positions_to_span_format(existing_positions)
+        current_result = calculate_portfolio_margin(current_span) if current_span else \
+                         {"total_scanning_risk": 0, "total_spread_credits": 0,
+                          "net_futures_margin": 0, "total_margin_requirement": 0}
+
+        # Combined portfolio margin (existing + new order netted)
+        signed_qty    = quantity if side == "BUY" else -quantity
+        combined_span = net_positions(current_span, symbol, signed_qty, price)
+        combined_result = calculate_portfolio_margin(combined_span)
+
+        current_total  = current_result.get("net_futures_margin", 0)
+        combined_total = combined_result.get("net_futures_margin", 0)
+        margin_impact  = combined_total - current_total
+
+        # Per-contract rate for display
+        prod = params.get("product_margins", {}).get(symbol.upper(), {})
+        per_contract_im = prod.get("initial_margin", 0)
+        per_contract_mm = prod.get("maintenance_margin", 0)
+
+        # Net position after trade
+        existing_qty = sum(
+            (p["quantity"] if p.get("side", "LONG") == "LONG" else -p["quantity"])
+            for p in existing_positions if p["symbol"] == symbol
+        )
+        net_qty = existing_qty + (quantity if side == "BUY" else -quantity)
+
+        detail = (
+            f"Existing portfolio SPAN: ${current_total:,.2f} | "
+            f"Combined SPAN (net {net_qty:+.0f} {symbol}): ${combined_total:,.2f} | "
+            f"Marginal impact: ${margin_impact:+,.2f}"
+        )
+        if combined_result.get("total_spread_credits", 0) > current_result.get("total_spread_credits", 0):
+            new_credits = combined_result["total_spread_credits"] - current_result.get("total_spread_credits", 0)
+            detail += f" (incl. ${new_credits:,.2f} new spread credits)"
+
+        return {
+            "initial_margin":      round(max(margin_impact, 0), 2),
+            "maintenance_margin":  round(max(margin_impact * 0.91, 0), 2),
+            "margin_impact":       round(margin_impact, 2),
+            "method":              "SPAN (portfolio netted)",
+            "calc_detail":         detail,
+            "current_portfolio_margin":  round(current_total, 2),
+            "combined_portfolio_margin": round(combined_total, 2),
+            "per_contract_im":     per_contract_im,
+            "per_contract_mm":     per_contract_mm,
+            "net_qty_after":       net_qty,
+        }
 
     # ── OPTIONS ON FUTURES (SPAN SOM) ────────────────────────────────────
     elif asset_class == "OPT" and symbol.upper() in params.get("asset_class_map", {}):
-        ac_key = params["asset_class_map"].get(symbol.upper(), "equity_futures")
-        som_key = ac_key + "_options" if "options" not in ac_key else ac_key
+        ac_key   = params["asset_class_map"].get(symbol.upper(), "equity_futures")
+        som_key  = ac_key + "_options" if "options" not in ac_key else ac_key
         som_rate = params.get("short_option_minimum", {}).get(som_key, 50)
         if is_short_option:
-            im   = quantity * som_rate
-            mm   = im * 0.90
+            im     = quantity * som_rate
+            mm     = im * 0.90
             detail = f"{quantity:.0f} contracts × ${som_rate} SOM = ${im:,.2f}"
             method = "SPAN (SOM)"
         else:
-            # Long option — pay premium only
             im     = abs(position_value)
             mm     = im
             detail = f"Long option: 100% premium = ${im:,.2f}"
             method = "SPAN (long premium)"
         return {"initial_margin": round(im, 2), "maintenance_margin": round(mm, 2),
-                "method": method, "calc_detail": detail}
+                "margin_impact": round(im, 2), "method": method,
+                "calc_detail": detail, "net_qty_after": None}
 
-    # ── EQUITY OPTIONS (Reg T options rules) ─────────────────────────────
+    # ── EQUITY OPTIONS ────────────────────────────────────────────────────
     elif asset_class == "OPT":
         if not is_short_option:
-            # Long option — 100% of premium
             im     = abs(position_value)
             mm     = im
             detail = f"Long option: 100% of premium ${abs(position_value):,.2f}"
             method = "Reg T (long option)"
         else:
-            # Short naked option — 20% of underlying notional
             im     = abs(position_value) * 0.20
-            mm     = abs(position_value) * 0.20
+            mm     = im
             detail = f"Short naked option: 20% × ${abs(position_value):,.2f} = ${im:,.2f}"
             method = "Reg T (short naked option)"
         return {"initial_margin": round(im, 2), "maintenance_margin": round(mm, 2),
-                "method": method, "calc_detail": detail}
+                "margin_impact": round(im, 2), "method": method,
+                "calc_detail": detail, "net_qty_after": None}
 
     # ── CRYPTO ───────────────────────────────────────────────────────────
     elif asset_class == "CRYPTO":
-        im     = abs(position_value) * 1.00
+        im     = abs(position_value)
         mm     = im
         detail = f"Crypto: 100% cash × ${abs(position_value):,.2f} = ${im:,.2f}"
-        method = "Cash (100%)"
         return {"initial_margin": round(im, 2), "maintenance_margin": round(mm, 2),
-                "method": method, "calc_detail": detail}
+                "margin_impact": round(im, 2), "method": "Cash (100%)",
+                "calc_detail": detail, "net_qty_after": None}
 
-    # ── BONDS held as securities ──────────────────────────────────────────
+    # ── BONDS ─────────────────────────────────────────────────────────────
     elif asset_class == "BOND":
         im     = abs(position_value) * 0.10
         mm     = abs(position_value) * 0.05
         detail = f"Bond: 10% × ${abs(position_value):,.2f} = ${im:,.2f}"
-        method = "Reg T (bond)"
         return {"initial_margin": round(im, 2), "maintenance_margin": round(mm, 2),
-                "method": method, "calc_detail": detail}
+                "margin_impact": round(im, 2), "method": "Reg T (bond)",
+                "calc_detail": detail, "net_qty_after": None}
 
     # ── EQUITIES (Reg T) ─────────────────────────────────────────────────
     else:
@@ -110,17 +189,17 @@ def calculate_pretrade_margin(symbol: str, asset_class: str, quantity: float,
         mr     = reg_t.get("maintenance", 0.25)
         im     = abs(position_value) * ir
         mm     = abs(position_value) * mr
-        detail = f"Reg T: ${abs(position_value):,.2f} × {ir:.0%} = ${im:,.2f} initial | × {mr:.0%} = ${mm:,.2f} maint."
-        method = "Reg T (equity)"
+        detail = (f"Reg T: ${abs(position_value):,.2f} × {ir:.0%} = "
+                  f"${im:,.2f} initial | × {mr:.0%} = ${mm:,.2f} maint.")
         return {"initial_margin": round(im, 2), "maintenance_margin": round(mm, 2),
-                "method": method, "calc_detail": detail}
+                "margin_impact": round(im, 2), "method": "Reg T (equity)",
+                "calc_detail": detail, "net_qty_after": None}
 
 
 def get_buying_power() -> dict:
-    """Collateral value - current margin used = available buying power."""
-    coll    = get_collateral_summary()
-    port    = get_portfolio_summary()
-    total_cv  = coll["total_collateral_value"]
+    coll        = get_collateral_summary()
+    port        = get_portfolio_summary()
+    total_cv    = coll["total_collateral_value"]
     margin_used = port["total_initial_margin"]
     available   = total_cv - margin_used
     return {
@@ -143,18 +222,17 @@ with col2:
     st.metric("Margin Currently Used",  f"${bp['margin_used']:,.2f}",
               help="Sum of initial margin on all open positions")
 with col3:
-    color = "normal" if bp["available_buying_power"] > 0 else "inverse"
     st.metric("Available Buying Power", f"${bp['available_buying_power']:,.2f}")
 with col4:
     st.metric("Margin Utilisation",     f"{bp['utilisation_pct']:.1f}%")
 
-# Utilisation bar
-util = min(bp["utilisation_pct"] / 100, 1.0)
+util      = min(bp["utilisation_pct"] / 100, 1.0)
 bar_color = "#2ECC71" if util < 0.6 else ("#F39C12" if util < 0.85 else "#cc3300")
 st.markdown(
     f'<div style="background:#2a2a2a;border-radius:6px;height:12px;margin:4px 0 16px 0;">'
-    f'<div style="background:{bar_color};width:{util*100:.1f}%;height:12px;border-radius:6px;"></div>'
-    f'</div>', unsafe_allow_html=True
+    f'<div style="background:{bar_color};width:{util*100:.1f}%;'
+    f'height:12px;border-radius:6px;"></div></div>',
+    unsafe_allow_html=True
 )
 
 st.markdown("---")
@@ -162,7 +240,6 @@ st.markdown("---")
 # ── ORDER INPUT FORM ─────────────────────────────────────────────────────
 st.subheader("📋 Order Details")
 
-# Instrument selection from Security Master
 all_instruments = search_instruments("", "All")
 inst_map = {
     f"{i['symbol']} — {i['name'] or ''} ({i['asset_class']})": i
@@ -184,12 +261,11 @@ if selected_inst_label == "— select —":
     st.info("Select an instrument above to begin.")
     st.stop()
 
-inst = inst_map[selected_inst_label]
+inst        = inst_map[selected_inst_label]
 symbol      = inst["symbol"]
 asset_class = inst["asset_class"]
 margin_method = inst.get("margin_method", "REGT")
 
-# Show instrument details
 with st.expander("📄 Instrument Details", expanded=False):
     dc1, dc2, dc3, dc4, dc5 = st.columns(5)
     dc1.metric("Symbol",        symbol)
@@ -208,16 +284,14 @@ col1, col2, col3, col4 = st.columns(4)
 with col1:
     order_side  = st.selectbox("Side", ["BUY", "SELL"], key="order_side")
 with col2:
-    order_qty   = st.number_input("Quantity",
-                                  min_value=1, value=1, step=1, key="order_qty")
+    order_qty   = st.number_input("Quantity", min_value=1, value=1,
+                                  step=1, key="order_qty")
 with col3:
-    order_price = st.number_input("Price ($)",
-                                  min_value=0.0, value=0.0,
+    order_price = st.number_input("Price ($)", min_value=0.0, value=0.0,
                                   step=0.01, format="%.4f", key="order_price")
 with col4:
     order_type  = st.selectbox("Order Type", ["MKT", "LMT"], key="order_type")
 
-# Asset-class specific fields
 is_short_opt = False
 option_right = None
 order_expiry = inst.get("expiry") or ""
@@ -231,8 +305,7 @@ if asset_class == "OPT":
                                     index=0 if inst.get("option_right") != "P" else 1,
                                     key="order_opt_right")
     with col2:
-        order_strike = st.number_input("Strike ($)",
-                                       min_value=0.0,
+        order_strike = st.number_input("Strike ($)", min_value=0.0,
                                        value=float(inst.get("strike") or 0.0),
                                        step=0.5, key="order_strike")
     with col3:
@@ -243,7 +316,6 @@ if asset_class in ["FUT", "OPT"]:
                                  value=inst.get("expiry") or "",
                                  key="order_expiry")
 
-# ── PRE-TRADE CHECK BUTTON ───────────────────────────────────────────────
 st.markdown("")
 check_col, _ = st.columns([1, 3])
 with check_col:
@@ -254,66 +326,72 @@ if run_check:
         st.error("❌ Please enter a valid price.")
     else:
         with st.spinner("Calculating margin impact..."):
-            # Our engine
-            margin = calculate_pretrade_margin(
+            existing_positions = get_positions("open")
+            margin = calculate_pretrade_margin_impact(
                 symbol, asset_class, order_qty, order_side,
-                order_price, option_right, is_short_opt
+                order_price, option_right, is_short_opt,
+                existing_positions
             )
-
-            # Buying power impact
-            bp_after  = bp["available_buying_power"] - margin["initial_margin"]
-            bp_change = -margin["initial_margin"]
+            bp_after  = bp["available_buying_power"] - margin["margin_impact"]
+            bp_change = -margin["margin_impact"]
             remaining_pct = (bp_after / bp["total_collateral_value"] * 100
                              if bp["total_collateral_value"] > 0 else 0)
-
-            # Margin call check
             margin_call = bp_after < 0
-            warning     = (not margin_call and
-                           remaining_pct < 10 and
-                           bp["total_collateral_value"] > 0)
+            warning     = (not margin_call and remaining_pct < 10
+                           and bp["total_collateral_value"] > 0)
 
         st.markdown("---")
         st.subheader("📊 Pre-Trade Margin Analysis")
 
-        # Status banner
         if margin_call:
-            st.error("🚨 MARGIN CALL — Insufficient buying power for this trade. "
+            st.error(f"🚨 MARGIN CALL — Insufficient buying power. "
                      f"Shortfall: ${abs(bp_after):,.2f}")
         elif warning:
-            st.warning(f"⚠️ LOW BUYING POWER — Only {remaining_pct:.1f}% of collateral "
-                       "remaining after this trade.")
+            st.warning(f"⚠️ LOW BUYING POWER — Only {remaining_pct:.1f}% remaining after trade.")
+        elif margin["margin_impact"] <= 0:
+            st.success("✅ Trade REDUCES margin requirement — this is a risk-reducing trade.")
         else:
             st.success("✅ Trade approved — sufficient buying power available.")
 
         # Margin metrics
         st.markdown("#### Margin Requirement")
         m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Initial Margin",      f"${margin['initial_margin']:,.2f}")
-        m2.metric("Maintenance Margin",  f"${margin['maintenance_margin']:,.2f}")
-        m3.metric("Margin Method",       margin["method"])
-        m4.metric("Notional Value",      f"${order_qty * order_price:,.2f}")
+        m1.metric("Marginal IM Impact",  f"${margin['margin_impact']:+,.2f}")
+        m2.metric("Initial Margin (IM)", f"${margin['initial_margin']:,.2f}")
+        m3.metric("Maint. Margin (MM)",  f"${margin['maintenance_margin']:,.2f}")
+        m4.metric("Method",              margin["method"])
+        st.caption(f"📐 {margin['calc_detail']}")
 
-        st.caption(f"📐 Calculation: {margin['calc_detail']}")
+        # Portfolio margin waterfall for futures
+        if asset_class == "FUT" and "current_portfolio_margin" in margin:
+            st.markdown("#### Portfolio SPAN Waterfall")
+            pw1, pw2, pw3, pw4 = st.columns(4)
+            pw1.metric("Current Portfolio Margin",  f"${margin['current_portfolio_margin']:,.2f}")
+            pw2.metric("Combined Portfolio Margin", f"${margin['combined_portfolio_margin']:,.2f}")
+            pw3.metric("Marginal Impact",
+                       f"${margin['margin_impact']:+,.2f}",
+                       delta="Reducing" if margin["margin_impact"] <= 0 else "Adding margin",
+                       delta_color="normal" if margin["margin_impact"] <= 0 else "inverse")
+            if margin.get("net_qty_after") is not None:
+                pw4.metric("Net Position After", f"{margin['net_qty_after']:+.0f} {symbol}")
 
         # Buying power waterfall
         st.markdown("#### Buying Power Impact")
         b1, b2, b3, b4 = st.columns(4)
         b1.metric("Collateral Value",    f"${bp['total_collateral_value']:,.2f}")
         b2.metric("Margin Already Used", f"${bp['margin_used']:,.2f}")
-        b3.metric("This Trade Margin",   f"${margin['initial_margin']:,.2f}")
-        color = "normal" if bp_after >= 0 else "inverse"
+        b3.metric("This Trade Impact",   f"${margin['margin_impact']:+,.2f}")
         b4.metric("Buying Power After",  f"${bp_after:,.2f}",
                   delta=f"{bp_change:+,.2f}", delta_color="inverse")
 
-        # IBKR validation (if gateway available)
+        # IBKR validation for equities
         if asset_class == "STK":
             st.markdown("#### 🔗 IBKR Validation")
-            with st.spinner("Checking against IBKR paper account..."):
+            with st.spinner("Checking against IBKR..."):
                 try:
                     from utils.ibkr import whatif_order
-                    ibkr_side   = order_side
-                    ibkr_result = whatif_order(symbol, int(order_qty), "MKT", ibkr_side, order_price)
-
+                    ibkr_result = whatif_order(symbol, int(order_qty), "MKT",
+                                               order_side, order_price)
                     if ibkr_result.get("error"):
                         st.warning(f"IBKR: {ibkr_result['error']}")
                     else:
@@ -321,24 +399,16 @@ if run_check:
                         our_im   = margin["initial_margin"]
                         diff     = abs(our_im - ibkr_im)
                         diff_pct = (diff / ibkr_im * 100) if ibkr_im > 0 else 0
-
                         iv1, iv2, iv3, iv4 = st.columns(4)
-                        iv1.metric("Our SPAN/RegT Calc",  f"${our_im:,.2f}")
-                        iv2.metric("IBKR Margin Impact",  f"${ibkr_im:,.2f}")
-                        iv3.metric("Difference",          f"${diff:,.2f}")
-                        iv4.metric("Variance %",          f"{diff_pct:.1f}%",
-                                   delta="✅ Within 10%" if diff_pct <= 10 else "⚠️ >10% variance",
+                        iv1.metric("Our Reg T Calc",   f"${our_im:,.2f}")
+                        iv2.metric("IBKR Margin",      f"${ibkr_im:,.2f}")
+                        iv3.metric("Difference",       f"${diff:,.2f}")
+                        iv4.metric("Variance %",       f"{diff_pct:.1f}%",
+                                   delta="✅ Within 10%" if diff_pct <= 10 else "⚠️ >10%",
                                    delta_color="off")
-
-                        if diff_pct > 10:
-                            st.warning(f"Our calc differs from IBKR by {diff_pct:.1f}% — "
-                                       "consider updating SPAN params in the Risk Calculator.")
-                        else:
-                            st.success(f"✅ Our calculation matches IBKR within {diff_pct:.1f}%")
                 except Exception as e:
                     st.info(f"IBKR gateway offline — validation skipped. ({str(e)[:80]})")
 
-        # Store result in session for submit
         st.session_state["pretrade_result"] = {
             "symbol":       symbol,
             "asset_class":  asset_class,
@@ -370,12 +440,14 @@ if "pretrade_result" in st.session_state:
             submit = st.button("✅ Confirm & Add to Portfolio",
                                type="primary", key="submit_order")
         with col2:
-            st.caption(f"This will add {r['side']} {r['quantity']} {r['symbol']} "
-                       f"@ ${r['price']:,.4f} to your Position Store with "
-                       f"initial margin ${r['margin']['initial_margin']:,.2f}.")
+            st.caption(
+                f"This will add {r['side']} {r['quantity']} {r['symbol']} "
+                f"@ ${r['price']:,.4f} to your Position Store with "
+                f"marginal margin impact ${r['margin']['margin_impact']:+,.2f}."
+            )
 
         if submit:
-            inst  = r["instrument"]
+            inst    = r["instrument"]
             payload = {
                 "symbol":             r["symbol"],
                 "asset_class":        r["asset_class"],
@@ -408,7 +480,6 @@ if "pretrade_result" in st.session_state:
 # ── OPEN POSITIONS SUMMARY ───────────────────────────────────────────────
 st.markdown("---")
 st.subheader("📋 Current Open Positions")
-
 positions = get_positions("open")
 if not positions:
     st.info("No open positions yet.")
