@@ -7,7 +7,9 @@ import pandas as pd
 
 from core.security_master import search_instruments, get_instrument
 from core.position_store import (
-    add_position, get_positions, get_portfolio_summary, update_position_margin
+    add_position, get_positions, get_positions_by_instrument,
+    get_portfolio_summary, update_position_margin,
+    reduce_or_close_position, recalculate_portfolio_margins
 )
 from core.collateral_manager import get_collateral_summary
 from core.span import calculate_portfolio_margin, load_span_params
@@ -426,7 +428,7 @@ if run_check:
             "margin":       margin,
             "bp_after":     bp_after,
             "margin_call":  margin_call,
-            "instrument":   inst,
+            "instrument":   inst,          # includes inst["id"] = security master id
         }
 
 # ── SUBMIT ORDER ─────────────────────────────────────────────────────────
@@ -450,35 +452,95 @@ if "pretrade_result" in st.session_state:
             )
 
         if submit:
-            inst    = r["instrument"]
-            payload = {
-                "symbol":             r["symbol"],
-                "asset_class":        r["asset_class"],
-                "name":               inst.get("name"),
-                "side":               r["side"],
-                "quantity":           r["quantity"],
-                "entry_price":        r["price"],
-                "current_price":      r["price"],
-                "expiry":             r["expiry"],
-                "strike":             r["strike"],
-                "option_right":       r["option_right"],
-                "multiplier":         inst.get("multiplier") or 1,
-                "contract_size":      inst.get("contract_size") or 1,
-                "margin_method":      r["margin"]["method"],
-                "initial_margin":     r["margin"]["initial_margin"],
-                "maintenance_margin": r["margin"]["maintenance_margin"],
-                "source":             "order_input",
-                "exchange":           inst.get("exchange"),
-                "currency":           inst.get("currency", "USD"),
-            }
-            ok, msg = add_position(payload)
-            if ok:
-                st.success(f"✅ {msg}")
-                st.balloons()
-                del st.session_state["pretrade_result"]
-                st.rerun()
+            inst          = r["instrument"]
+            instrument_id = inst.get("id")       # unique contract id from security master
+            symbol        = r["symbol"]
+            ac            = r["asset_class"]
+            side          = r["side"]
+            qty           = r["quantity"]
+            opposite_side = "SHORT" if side == "LONG" else "LONG"
+
+            # Netting: find existing opposite positions for EXACT same instrument_id
+            # Different maturities = different instrument_id = no netting
+            existing_opposite = []
+            if instrument_id:
+                from core.position_store import get_positions_by_instrument
+                existing_by_id = get_positions_by_instrument(instrument_id)
+                existing_opposite = [p for p in existing_by_id if p["side"] == opposite_side]
+
+            if existing_opposite and ac == "FUT":
+                # Same contract, opposite side — net it
+                ok, msg, remainder = reduce_or_close_position(
+                    instrument_id, qty, symbol
+                )
+                if ok:
+                    if remainder > 0:
+                        # Sold more than we held — open remainder as new opposite position
+                        payload = {
+                            "instrument_id":  instrument_id,
+                            "symbol":         symbol,
+                            "asset_class":    ac,
+                            "name":           inst.get("name"),
+                            "side":           side,
+                            "quantity":       remainder,
+                            "entry_price":    r["price"],
+                            "current_price":  r["price"],
+                            "expiry":         r["expiry"],
+                            "multiplier":     inst.get("multiplier") or 1,
+                            "contract_size":  inst.get("contract_size") or 1,
+                            "margin_method":  r["margin"]["method"],
+                            "initial_margin": 0,
+                            "maintenance_margin": 0,
+                            "source":         "order_input",
+                            "exchange":       inst.get("exchange"),
+                            "currency":       inst.get("currency", "USD"),
+                        }
+                        add_position(payload)
+                        msg = (f"Closed existing {opposite_side} and opened "
+                               f"{side} {remainder} {symbol}")
+                    else:
+                        msg = f"Reduced/closed existing {opposite_side} {symbol} position"
+                    recalculate_portfolio_margins()
+                    st.success(f"✅ {msg}")
+                    st.balloons()
+                    del st.session_state["pretrade_result"]
+                    st.rerun()
+                else:
+                    st.error(f"❌ {msg}")
             else:
-                st.error(f"❌ {msg}")
+                # New position (different contract or same side) — just add it
+                payload = {
+                    "instrument_id":      instrument_id,
+                    "symbol":             symbol,
+                    "asset_class":        ac,
+                    "name":               inst.get("name"),
+                    "side":               side,
+                    "quantity":           qty,
+                    "entry_price":        r["price"],
+                    "current_price":      r["price"],
+                    "expiry":             r["expiry"],
+                    "strike":             r["strike"],
+                    "option_right":       r["option_right"],
+                    "multiplier":         inst.get("multiplier") or 1,
+                    "contract_size":      inst.get("contract_size") or 1,
+                    "margin_method":      r["margin"]["method"],
+                    "initial_margin":     r["margin"]["initial_margin"],
+                    "maintenance_margin": r["margin"]["maintenance_margin"],
+                    "source":             "order_input",
+                    "exchange":           inst.get("exchange"),
+                    "currency":           inst.get("currency", "USD"),
+                }
+                ok, msg = add_position(payload)
+                if ok:
+                    # Always recalc futures margins — captures spread credits
+                    if ac == "FUT":
+                        recalculate_portfolio_margins()
+                    st.success(f"✅ {msg}")
+                    st.balloons()
+                    del st.session_state["pretrade_result"]
+                    st.rerun()
+                else:
+                    st.error(f"❌ {msg}")
 
 # ── OPEN POSITIONS SUMMARY ───────────────────────────────────────────────
 st.markdown("---")

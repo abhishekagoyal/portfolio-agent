@@ -15,6 +15,7 @@ def init_positions_db():
     conn.execute("""
         CREATE TABLE IF NOT EXISTS positions (
             id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+            instrument_id       INTEGER,              -- FK to instruments.id in security master
             symbol              TEXT NOT NULL,
             asset_class         TEXT NOT NULL,
             name                TEXT,
@@ -42,6 +43,12 @@ def init_positions_db():
             updated_at          TEXT
         )
     """)
+    # Add instrument_id column if upgrading existing db
+    try:
+        conn.execute("ALTER TABLE positions ADD COLUMN instrument_id INTEGER")
+        conn.commit()
+    except Exception:
+        pass  # Column already exists
     conn.commit()
     conn.close()
 
@@ -52,7 +59,7 @@ def _normalise_side(side: str) -> str:
         return "LONG"
     if s == "SELL":
         return "SHORT"
-    return s  # already LONG or SHORT
+    return s
 
 def _compute_fields(d: dict) -> dict:
     """Compute market_value, unrealized_pnl, notional_value from raw fields."""
@@ -75,21 +82,22 @@ def _compute_fields(d: dict) -> dict:
 
 def add_position(data: dict) -> tuple[bool, str]:
     try:
-        # Normalise side before anything else
         data["side"] = _normalise_side(data.get("side", "LONG"))
         data = _compute_fields(data)
         conn = get_connection()
         now  = datetime.utcnow().isoformat()
         conn.execute("""
             INSERT INTO positions (
-                symbol, asset_class, name, side, quantity, entry_price, current_price,
+                instrument_id, symbol, asset_class, name, side,
+                quantity, entry_price, current_price,
                 expiry, strike, option_right, multiplier, contract_size,
                 market_value, unrealized_pnl, notional_value,
                 margin_method, initial_margin, maintenance_margin,
                 source, account_id, exchange, currency,
                 status, opened_at, updated_at
             ) VALUES (
-                :symbol, :asset_class, :name, :side, :quantity, :entry_price, :current_price,
+                :instrument_id, :symbol, :asset_class, :name, :side,
+                :quantity, :entry_price, :current_price,
                 :expiry, :strike, :option_right, :multiplier, :contract_size,
                 :market_value, :unrealized_pnl, :notional_value,
                 :margin_method, :initial_margin, :maintenance_margin,
@@ -97,6 +105,7 @@ def add_position(data: dict) -> tuple[bool, str]:
                 :status, :opened_at, :updated_at
             )
         """, {
+            "instrument_id":      data.get("instrument_id"),
             "symbol":             data.get("symbol", "").upper(),
             "asset_class":        data.get("asset_class", "STK"),
             "name":               data.get("name"),
@@ -140,6 +149,62 @@ def get_positions(status: str = "open", asset_class: str = None) -> list[dict]:
     rows = conn.execute(sql, params).fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
+def get_positions_by_instrument(instrument_id: int, status: str = "open") -> list[dict]:
+    """Get all positions for a specific instrument_id (exact contract match)."""
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT * FROM positions WHERE instrument_id=? AND status=? ORDER BY opened_at ASC",
+        (instrument_id, status)
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+def reduce_or_close_position(instrument_id: int, reduce_qty: float,
+                              symbol: str = None) -> tuple[bool, str, float]:
+    """
+    Reduce existing opposite position(s) for a given instrument_id by reduce_qty.
+    Returns (success, message, remaining_qty) where remaining_qty > 0 means
+    the order exceeded the existing position — caller opens remainder as new position.
+    """
+    try:
+        conn = get_connection()
+        rows = conn.execute(
+            "SELECT * FROM positions WHERE instrument_id=? AND status='open' ORDER BY opened_at ASC",
+            (instrument_id,)
+        ).fetchall()
+
+        if not rows:
+            conn.close()
+            return False, f"No open position found for instrument_id={instrument_id}", reduce_qty
+
+        remaining = reduce_qty
+        for row in rows:
+            p = dict(row)
+            existing_qty = p["quantity"]
+
+            if remaining >= existing_qty:
+                conn.execute(
+                    "UPDATE positions SET status='closed', updated_at=? WHERE id=?",
+                    (datetime.utcnow().isoformat(), p["id"])
+                )
+                remaining -= existing_qty
+            else:
+                new_qty = existing_qty - remaining
+                conn.execute(
+                    "UPDATE positions SET quantity=?, updated_at=? WHERE id=?",
+                    (new_qty, datetime.utcnow().isoformat(), p["id"])
+                )
+                remaining = 0
+                break
+
+        conn.commit()
+        conn.close()
+        label = symbol or f"instrument_id={instrument_id}"
+        return True, f"Reduced {label} by {reduce_qty}", remaining
+
+    except Exception as e:
+        return False, str(e), 0
 
 def update_position_price(id: int, current_price: float) -> tuple[bool, str]:
     try:
@@ -197,6 +262,55 @@ def close_position(id: int) -> tuple[bool, str]:
         return True, "Position closed."
     except Exception as e:
         return False, str(e)
+
+def recalculate_portfolio_margins() -> None:
+    """
+    Recalculate and update margin for all open futures positions based on
+    current full portfolio — captures spread credits across all products.
+    """
+    from core.span import calculate_portfolio_margin
+    positions = get_positions("open")
+    if not positions:
+        return
+
+    span_positions = []
+    for p in positions:
+        if p["asset_class"] == "FUT":
+            is_long = p["side"] == "LONG"
+            span_positions.append({
+                "symbol":          p["symbol"],
+                "quantity":        p["quantity"] if is_long else -p["quantity"],
+                "price":           p["current_price"] or p["entry_price"],
+                "is_short_option": False,
+            })
+
+    if not span_positions:
+        return
+
+    result         = calculate_portfolio_margin(span_positions)
+    total_scanning = result.get("total_scanning_risk", 0)
+    total_net      = result.get("net_futures_margin", 0)
+    credit_ratio   = (total_net / total_scanning) if total_scanning > 0 else 1.0
+
+    conn = get_connection()
+    for p in positions:
+        if p["asset_class"] != "FUT":
+            continue
+        prod_result = next(
+            (fp for fp in result.get("futures_positions", [])
+             if fp["symbol"] == p["symbol"]),
+            None
+        )
+        if prod_result:
+            gross_im = prod_result.get("initial_margin", 0)
+            net_im   = round(gross_im * credit_ratio, 2)
+            net_mm   = round(net_im * 0.91, 2)
+            conn.execute(
+                "UPDATE positions SET initial_margin=?, maintenance_margin=?, updated_at=? WHERE id=?",
+                (net_im, net_mm, datetime.utcnow().isoformat(), p["id"])
+            )
+    conn.commit()
+    conn.close()
 
 def get_portfolio_summary() -> dict:
     positions = get_positions("open")
