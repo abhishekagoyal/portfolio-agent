@@ -15,42 +15,28 @@ def init_positions_db():
     conn.execute("""
         CREATE TABLE IF NOT EXISTS positions (
             id                  INTEGER PRIMARY KEY AUTOINCREMENT,
-
-            -- identity
             symbol              TEXT NOT NULL,
             asset_class         TEXT NOT NULL,
             name                TEXT,
-
-            -- trade details
             side                TEXT DEFAULT 'LONG',
             quantity            REAL NOT NULL,
             entry_price         REAL NOT NULL,
             current_price       REAL DEFAULT 0,
-
-            -- futures / options specific
             expiry              TEXT,
             strike              REAL,
             option_right        TEXT,
             multiplier          REAL DEFAULT 1,
             contract_size       REAL DEFAULT 1,
-
-            -- computed values (recalculated on price update)
             market_value        REAL DEFAULT 0,
             unrealized_pnl      REAL DEFAULT 0,
             notional_value      REAL DEFAULT 0,
-
-            -- margin (populated by margin engine)
             margin_method       TEXT,
             initial_margin      REAL DEFAULT 0,
             maintenance_margin  REAL DEFAULT 0,
-
-            -- source
             source              TEXT DEFAULT 'manual',
             account_id          TEXT,
             exchange            TEXT,
             currency            TEXT DEFAULT 'USD',
-
-            -- status
             status              TEXT DEFAULT 'open',
             opened_at           TEXT,
             updated_at          TEXT
@@ -59,19 +45,28 @@ def init_positions_db():
     conn.commit()
     conn.close()
 
+def _normalise_side(side: str) -> str:
+    """Normalise BUY→LONG, SELL→SHORT regardless of source."""
+    s = (side or "LONG").upper()
+    if s == "BUY":
+        return "LONG"
+    if s == "SELL":
+        return "SHORT"
+    return s  # already LONG or SHORT
+
 def _compute_fields(d: dict) -> dict:
     """Compute market_value, unrealized_pnl, notional_value from raw fields."""
-    qty    = d.get("quantity", 0) or 0
-    entry  = d.get("entry_price", 0) or 0
-    curr   = d.get("current_price", 0) or entry
-    mult   = d.get("multiplier", 1) or 1
-    cs     = d.get("contract_size", 1) or 1
-    side   = d.get("side", "LONG")
+    qty   = d.get("quantity", 0) or 0
+    entry = d.get("entry_price", 0) or 0
+    curr  = d.get("current_price", 0) or entry
+    mult  = d.get("multiplier", 1) or 1
+    cs    = d.get("contract_size", 1) or 1
+    side  = _normalise_side(d.get("side", "LONG"))
 
-    notional      = abs(qty) * curr * mult * cs
-    market_value  = notional if side == "LONG" else -notional
-    direction     = 1 if side == "LONG" else -1
-    unrealized    = direction * qty * (curr - entry) * mult * cs
+    notional     = abs(qty) * curr * mult * cs
+    market_value = notional if side == "LONG" else -notional
+    direction    = 1 if side == "LONG" else -1
+    unrealized   = direction * qty * (curr - entry) * mult * cs
 
     d["market_value"]   = round(market_value, 2)
     d["unrealized_pnl"] = round(unrealized, 2)
@@ -80,6 +75,8 @@ def _compute_fields(d: dict) -> dict:
 
 def add_position(data: dict) -> tuple[bool, str]:
     try:
+        # Normalise side before anything else
+        data["side"] = _normalise_side(data.get("side", "LONG"))
         data = _compute_fields(data)
         conn = get_connection()
         now  = datetime.utcnow().isoformat()
@@ -103,7 +100,7 @@ def add_position(data: dict) -> tuple[bool, str]:
             "symbol":             data.get("symbol", "").upper(),
             "asset_class":        data.get("asset_class", "STK"),
             "name":               data.get("name"),
-            "side":               data.get("side", "LONG"),
+            "side":               data["side"],
             "quantity":           data.get("quantity", 0),
             "entry_price":        data.get("entry_price", 0),
             "current_price":      data.get("current_price", data.get("entry_price", 0)),
@@ -128,12 +125,12 @@ def add_position(data: dict) -> tuple[bool, str]:
         })
         conn.commit()
         conn.close()
-        return True, f"Position added: {data.get('side','LONG')} {data.get('quantity')} {data.get('symbol','').upper()}"
+        return True, f"Position added: {data['side']} {data.get('quantity')} {data.get('symbol','').upper()}"
     except Exception as e:
         return False, f"Error: {str(e)}"
 
 def get_positions(status: str = "open", asset_class: str = None) -> list[dict]:
-    conn = get_connection()
+    conn   = get_connection()
     sql    = "SELECT * FROM positions WHERE status = ?"
     params = [status]
     if asset_class and asset_class != "All":
@@ -145,7 +142,6 @@ def get_positions(status: str = "open", asset_class: str = None) -> list[dict]:
     return [dict(r) for r in rows]
 
 def update_position_price(id: int, current_price: float) -> tuple[bool, str]:
-    """Update current price and recompute P&L fields."""
     try:
         conn = get_connection()
         row  = conn.execute("SELECT * FROM positions WHERE id = ?", (id,)).fetchone()
@@ -171,8 +167,8 @@ def update_position_price(id: int, current_price: float) -> tuple[bool, str]:
     except Exception as e:
         return False, str(e)
 
-def update_position_margin(id: int, initial_margin: float, maintenance_margin: float) -> tuple[bool, str]:
-    """Update margin fields after margin engine calculation."""
+def update_position_margin(id: int, initial_margin: float,
+                           maintenance_margin: float) -> tuple[bool, str]:
     try:
         conn = get_connection()
         conn.execute("""
@@ -181,7 +177,8 @@ def update_position_margin(id: int, initial_margin: float, maintenance_margin: f
                 maintenance_margin = ?,
                 updated_at         = ?
             WHERE id = ?
-        """, (initial_margin, maintenance_margin, datetime.utcnow().isoformat(), id))
+        """, (initial_margin, maintenance_margin,
+              datetime.utcnow().isoformat(), id))
         conn.commit()
         conn.close()
         return True, "Margin updated."
@@ -189,7 +186,6 @@ def update_position_margin(id: int, initial_margin: float, maintenance_margin: f
         return False, str(e)
 
 def close_position(id: int) -> tuple[bool, str]:
-    """Soft close a position."""
     try:
         conn = get_connection()
         conn.execute(
@@ -203,24 +199,23 @@ def close_position(id: int) -> tuple[bool, str]:
         return False, str(e)
 
 def get_portfolio_summary() -> dict:
-    """Aggregate across all open positions."""
     positions = get_positions("open")
     if not positions:
         return {
-            "total_notional":         0,
-            "total_market_value":     0,
-            "total_unrealized_pnl":   0,
-            "total_initial_margin":   0,
+            "total_notional":           0,
+            "total_market_value":       0,
+            "total_unrealized_pnl":     0,
+            "total_initial_margin":     0,
             "total_maintenance_margin": 0,
-            "by_asset_class":         {},
-            "positions":              [],
+            "by_asset_class":           {},
+            "positions":                [],
         }
 
-    total_notional  = sum(p["notional_value"]      for p in positions)
-    total_mv        = sum(p["market_value"]         for p in positions)
-    total_pnl       = sum(p["unrealized_pnl"]       for p in positions)
-    total_im        = sum(p["initial_margin"]       for p in positions)
-    total_mm        = sum(p["maintenance_margin"]   for p in positions)
+    total_notional = sum(p["notional_value"]    for p in positions)
+    total_mv       = sum(p["market_value"]       for p in positions)
+    total_pnl      = sum(p["unrealized_pnl"]     for p in positions)
+    total_im       = sum(p["initial_margin"]     for p in positions)
+    total_mm       = sum(p["maintenance_margin"] for p in positions)
 
     by_class = {}
     for p in positions:
