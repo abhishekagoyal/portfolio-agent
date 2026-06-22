@@ -265,49 +265,77 @@ def close_position(id: int) -> tuple[bool, str]:
 
 def recalculate_portfolio_margins() -> None:
     """
-    Recalculate and update margin for all open futures positions based on
-    current full portfolio — captures spread credits across all products.
+    Recalculate and update margin for all open futures positions.
+    Nets long/short positions in the same symbol before calculating SPAN,
+    then distributes the net margin proportionally across individual position rows.
     """
     from core.span import calculate_portfolio_margin
     positions = get_positions("open")
-    if not positions:
+    fut_positions = [p for p in positions if p["asset_class"] == "FUT"]
+    if not fut_positions:
         return
 
+    # Step 1: Net quantities per symbol across all open positions
+    net_by_symbol = {}
+    for p in fut_positions:
+        sym = p["symbol"]
+        is_long = p["side"] == "LONG"
+        signed_qty = p["quantity"] if is_long else -p["quantity"]
+        price = p["current_price"] or p["entry_price"]
+        if sym not in net_by_symbol:
+            net_by_symbol[sym] = {"net_qty": 0, "price": price}
+        net_by_symbol[sym]["net_qty"] += signed_qty
+
+    # Step 2: Build span positions from net quantities (exclude flat positions)
     span_positions = []
-    for p in positions:
-        if p["asset_class"] == "FUT":
-            is_long = p["side"] == "LONG"
+    for sym, data in net_by_symbol.items():
+        if data["net_qty"] != 0:
             span_positions.append({
-                "symbol":          p["symbol"],
-                "quantity":        p["quantity"] if is_long else -p["quantity"],
-                "price":           p["current_price"] or p["entry_price"],
+                "symbol":          sym,
+                "quantity":        data["net_qty"],
+                "price":           data["price"],
                 "is_short_option": False,
             })
 
-    if not span_positions:
-        return
+    # Step 3: Calculate SPAN on netted portfolio
+    if span_positions:
+        result = calculate_portfolio_margin(span_positions)
+        total_scanning = result.get("total_scanning_risk", 0)
+        total_net      = result.get("net_futures_margin", 0)
+        credit_ratio   = (total_net / total_scanning) if total_scanning > 0 else 1.0
 
-    result         = calculate_portfolio_margin(span_positions)
-    total_scanning = result.get("total_scanning_risk", 0)
-    total_net      = result.get("net_futures_margin", 0)
-    credit_ratio   = (total_net / total_scanning) if total_scanning > 0 else 1.0
-
-    conn = get_connection()
-    for p in positions:
-        if p["asset_class"] != "FUT":
-            continue
-        prod_result = next(
-            (fp for fp in result.get("futures_positions", [])
-             if fp["symbol"] == p["symbol"]),
-            None
-        )
-        if prod_result:
-            gross_im = prod_result.get("initial_margin", 0)
+        # Build per-symbol net margin map
+        symbol_margin = {}
+        for fp in result.get("futures_positions", []):
+            sym      = fp["symbol"]
+            gross_im = fp.get("initial_margin", 0)
             net_im   = round(gross_im * credit_ratio, 2)
-            net_mm   = round(net_im * 0.91, 2)
+            symbol_margin[sym] = net_im
+    else:
+        # All positions net to flat — zero margin
+        symbol_margin = {}
+
+    # Step 4: Distribute net margin across individual position rows for each symbol
+    # Group positions by symbol, split margin proportionally by quantity
+    conn = get_connection()
+    for sym in net_by_symbol:
+        sym_positions = [p for p in fut_positions if p["symbol"] == sym]
+        net_qty       = abs(net_by_symbol[sym]["net_qty"])
+        total_qty     = sum(p["quantity"] for p in sym_positions)
+        net_im_total  = symbol_margin.get(sym, 0)
+
+        for p in sym_positions:
+            if net_qty == 0:
+                # Fully netted — zero margin on all rows
+                row_im = 0.0
+                row_mm = 0.0
+            else:
+                # Distribute proportionally by quantity contribution to net
+                row_im = round(net_im_total * (p["quantity"] / total_qty), 2)
+                row_mm = round(row_im * 0.91, 2)
             conn.execute(
                 "UPDATE positions SET initial_margin=?, maintenance_margin=?, updated_at=? WHERE id=?",
-                (net_im, net_mm, datetime.utcnow().isoformat(), p["id"])
+                (row_im, row_mm, datetime.utcnow().isoformat(), p["id"])
             )
     conn.commit()
     conn.close()
