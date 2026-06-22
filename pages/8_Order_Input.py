@@ -271,6 +271,27 @@ with col2:
 
 if selected_inst_label == "— select —":
     st.info("Select an instrument above to begin.")
+    # Show open positions even when no instrument selected
+    st.markdown("---")
+    st.subheader("📋 Current Open Positions")
+    _positions = get_positions("open")
+    if not _positions:
+        st.info("No open positions yet.")
+    else:
+        _rows = []
+        for p in _positions:
+            _rows.append({
+                "Symbol":          p["symbol"],
+                "Asset Class":     p["asset_class"],
+                "Side":            p["side"],
+                "Qty":             p["quantity"],
+                "Entry ($)":       f"${p['entry_price']:,.4f}",
+                "Notional ($)":    f"${p['notional_value']:,.2f}",
+                "Init Margin ($)": f"${p['initial_margin']:,.2f}",
+                "Method":          p.get("margin_method") or "—",
+                "Source":          p["source"],
+            })
+        st.dataframe(pd.DataFrame(_rows), use_container_width=True, hide_index=True)
     st.stop()
 
 inst        = inst_map[selected_inst_label]
