@@ -215,6 +215,13 @@ def get_buying_power() -> dict:
     }
 
 
+# ── AUTO-RECALC MARGINS ON PAGE LOAD ────────────────────────────────────
+# Always recalculate futures margins on load so buying power reflects
+# true netted portfolio margin, not stale stored values
+if "margins_recalculated" not in st.session_state:
+    recalculate_portfolio_margins()
+    st.session_state["margins_recalculated"] = True
+
 # ── CURRENT BUYING POWER PANEL ───────────────────────────────────────────
 st.subheader("💰 Current Buying Power")
 bp = get_buying_power()
