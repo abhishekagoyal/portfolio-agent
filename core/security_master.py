@@ -150,6 +150,13 @@ def get_all_asset_classes() -> list[str]:
     return [r["asset_class"] for r in rows]
 
 def seed_default_instruments():
+    """Seed default instruments only if the table is empty — never on subsequent loads."""
+    conn = get_connection()
+    count = conn.execute("SELECT COUNT(*) FROM instruments WHERE status='active'").fetchone()[0]
+    conn.close()
+    if count > 0:
+        return  # Already seeded — do nothing
+
     defaults = [
         {"symbol": "AAPL", "name": "Apple Inc",                "asset_class": "STK",    "exchange": "NASDAQ", "margin_method": "REGT", "currency": "USD"},
         {"symbol": "MSFT", "name": "Microsoft Corp",            "asset_class": "STK",    "exchange": "NASDAQ", "margin_method": "REGT", "currency": "USD"},
