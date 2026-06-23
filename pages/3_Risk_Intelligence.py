@@ -17,6 +17,17 @@ st.set_page_config(page_title="Risk Intelligence", page_icon="🧠", layout="wid
 st.title("🧠 Risk Intelligence")
 st.caption("VaR, Scenario Analysis, Greeks, Concentration Risk and Stress P&L.")
 
+# Scenario descriptions
+PREDEFINED_SCENARIOS_DESC = {
+    '2008 Financial Crisis': 'Global financial crisis, Lehman collapse, credit freeze',
+    'COVID Crash 2020':      'Pandemic onset, fastest 30% market decline in history',
+    'Rate Shock 2022':       'Fed aggressive rate hikes, bond market selloff',
+    'Crypto Winter 2022':    'FTX collapse, crypto contagion, digital asset selloff',
+    'Tech Selloff':          'Nasdaq correction, growth stock rotation to value',
+    'Oil Shock':             'Geopolitical supply disruption, crude +40%',
+    'Gold Rally':            'Flight to safety, gold +20%, equities fall',
+}
+
 # Load positions from new position store
 positions = get_positions("open")
 summary   = get_portfolio_summary()
@@ -514,14 +525,3 @@ with tab5:
         fig_stress.update_layout(paper_bgcolor="rgba(0,0,0,0)", font_color="#fff",
                                  plot_bgcolor="rgba(0,0,0,0)")
         st.plotly_chart(fig_stress, use_container_width=True)
-
-# Scenario descriptions for display
-PREDEFINED_SCENARIOS_DESC = {
-    '2008 Financial Crisis': 'Global financial crisis, Lehman collapse, credit freeze',
-    'COVID Crash 2020':      'Pandemic onset, fastest 30% market decline in history',
-    'Rate Shock 2022':       'Fed aggressive rate hikes, bond market selloff',
-    'Crypto Winter 2022':    'FTX collapse, crypto contagion, digital asset selloff',
-    'Tech Selloff':          'Nasdaq correction, growth stock rotation to value',
-    'Oil Shock':             'Geopolitical supply disruption, crude +40%',
-    'Gold Rally':            'Flight to safety, gold +20%, equities fall',
-}
