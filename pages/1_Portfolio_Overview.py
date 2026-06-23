@@ -7,6 +7,7 @@ import plotly.express as px
 import pandas as pd
 
 from core.portfolio import calculate_portfolio_summary, calculate_pnl, get_position_weights
+from core.margin_call import get_margin_call_status
 from utils.s3 import load_positions, load_span_results
 
 st.set_page_config(page_title='Portfolio Overview', page_icon='📊', layout='wide')
@@ -16,6 +17,41 @@ if 'positions' not in st.session_state:
     st.session_state.positions = load_positions()
 if 'span_results' not in st.session_state:
     st.session_state.span_results = load_span_results()
+
+# ── MARGIN HEALTH ALERT BANNER ───────────────────────────────────────────────
+try:
+    mc_status = get_margin_call_status()
+    alert     = mc_status["alert"]
+    el        = mc_status["excess_liquidity"]
+    mm        = mc_status["total_mm"]
+    cv        = mc_status["collateral_value"]
+
+    st.markdown(
+        f'<div style="padding:12px 18px;border-radius:8px;background:{alert["color"]}22;'
+        f'border-left:6px solid {alert["color"]};margin-bottom:16px;'
+        f'display:flex;align-items:center;justify-content:space-between;">'
+        f'<div>'
+        f'<span style="font-size:20px;">{alert["emoji"]}</span>&nbsp;&nbsp;'
+        f'<span style="font-size:16px;font-weight:700;color:{alert["color"]};">'
+        f'{alert["label"]}</span>&nbsp;&nbsp;'
+        f'<span style="color:#ccc;font-size:13px;">{alert["description"]}</span>'
+        f'</div>'
+        f'<div style="text-align:right;">'
+        f'<span style="color:#aaa;font-size:12px;">Excess Liquidity&nbsp;</span>'
+        f'<span style="color:{alert["color"]};font-size:15px;font-weight:600;">'
+        f'${el:,.2f}</span>'
+        f'&nbsp;&nbsp;'
+        f'<span style="color:#aaa;font-size:12px;">MM Used&nbsp;</span>'
+        f'<span style="color:#fff;font-size:15px;font-weight:600;">${mm:,.2f}</span>'
+        f'&nbsp;&nbsp;'
+        f'<span style="color:#aaa;font-size:12px;">Collateral&nbsp;</span>'
+        f'<span style="color:#fff;font-size:15px;font-weight:600;">${cv:,.2f}</span>'
+        f'</div>'
+        f'</div>',
+        unsafe_allow_html=True
+    )
+except Exception as e:
+    st.info(f"Margin monitor unavailable: {str(e)[:80]}")
 
 # ── IBKR Live Account Overview ───────────────────────────────────────────────
 st.subheader('🏦 IBKR Account Overview (Live)')
@@ -44,24 +80,23 @@ elif ibkr_data:
 
     net_liq    = ibkr_data.get('net_liquidation')
     buying_pwr = ibkr_data.get('buying_power')
-    init_mrgn  = ibkr_data.get('initial_margin')  or 0
+    init_mrgn  = ibkr_data.get('initial_margin') or 0
     maint_mrgn = ibkr_data.get('maintenance_margin') or 0
     excess_liq = ibkr_data.get('excess_liquidity')
 
-    # Margin utilisation: initial margin as % of net liquidation
     try:
-        util_pct = (float(init_mrgn) / float(net_liq) * 100) if net_liq and float(net_liq) > 0 else 0
-        util_str = f'{util_pct:.1f}%'
+        util_pct   = (float(init_mrgn) / float(net_liq) * 100) if net_liq and float(net_liq) > 0 else 0
+        util_str   = f'{util_pct:.1f}%'
         util_delta = '🟢 Low' if util_pct < 30 else ('🟡 Medium' if util_pct < 60 else '🔴 High')
     except:
-        util_str = 'N/A'
+        util_str   = 'N/A'
         util_delta = ''
 
     col1, col2, col3, col4, col5 = st.columns(5)
     with col1:
-        st.metric('Net Liquidation', fmt(net_liq))
+        st.metric('Net Liquidation',    fmt(net_liq))
     with col2:
-        st.metric('Buying Power', fmt(buying_pwr))
+        st.metric('Buying Power',       fmt(buying_pwr))
     with col3:
         st.metric('Initial Margin Req', fmt(init_mrgn))
     with col4:
@@ -71,13 +106,13 @@ elif ibkr_data:
 
     if excess_liq is not None:
         try:
-            el = float(excess_liq)
-            color = '#1a9e3f' if el > 0 else '#cc3300'
+            el_ibkr  = float(excess_liq)
+            color_el = '#1a9e3f' if el_ibkr > 0 else '#cc3300'
             st.markdown(
                 f'<div style="padding:8px 12px;border-radius:6px;background:#1e1e1e;'
-                f'border-left:4px solid {color};margin-top:8px;">'
-                f'<span style="color:#aaa;font-size:13px;">Excess Liquidity</span>&nbsp;&nbsp;'
-                f'<span style="color:{color};font-size:16px;font-weight:600;">${el:,.2f}</span>'
+                f'border-left:4px solid {color_el};margin-top:8px;">'
+                f'<span style="color:#aaa;font-size:13px;">IBKR Excess Liquidity</span>&nbsp;&nbsp;'
+                f'<span style="color:{color_el};font-size:16px;font-weight:600;">${el_ibkr:,.2f}</span>'
                 f'</div>',
                 unsafe_allow_html=True
             )
@@ -120,10 +155,10 @@ if st.session_state.span_results:
     with col1:
         st.metric('Net Margin Requirement', '$' + '{:,.2f}'.format(span.get('net_margin_requirement', 0)))
     with col2:
-        st.metric('Spread Credits', '$' + '{:,.2f}'.format(span.get('total_spread_credits', 0)))
+        st.metric('Spread Credits',         '$' + '{:,.2f}'.format(span.get('total_spread_credits', 0)))
     with col3:
-        total_val = summary['total_market_value']
-        margin    = span.get('net_margin_requirement', 0)
+        total_val   = summary['total_market_value']
+        margin      = span.get('net_margin_requirement', 0)
         utilization = (margin / total_val * 100) if total_val > 0 else 0
         st.metric('SPAN Margin Utilization', '{:.1f}'.format(utilization) + '%')
 
@@ -131,8 +166,8 @@ st.markdown('---')
 st.subheader('Position Details')
 df = pd.DataFrame(enriched)
 if not df.empty:
-    display_cols  = ['symbol', 'quantity', 'entry_price', 'price', 'market_value', 'pnl', 'pnl_pct']
-    df_display    = df[display_cols].copy()
+    display_cols       = ['symbol', 'quantity', 'entry_price', 'price', 'market_value', 'pnl', 'pnl_pct']
+    df_display         = df[display_cols].copy()
     df_display.columns = ['Symbol', 'Qty', 'Entry Price', 'Current Price', 'Market Value', 'P&L', 'P&L %']
     st.dataframe(df_display, use_container_width=True)
 
