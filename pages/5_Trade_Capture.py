@@ -308,10 +308,20 @@ st.markdown("---")
 st.subheader("📋 Order Details")
 
 all_instruments = search_instruments("", "All")
-inst_map = {
-    f"{i['symbol']} — {i['name'] or ''} ({i['asset_class']})": i
-    for i in all_instruments
-}
+
+def _inst_label(i: dict) -> str:
+    """Build a unique, human-readable label for each instrument."""
+    label = f"{i['symbol']}"
+    if i.get("name"):
+        label += f" — {i['name']}"
+    if i.get("expiry"):
+        label += f" [{i['expiry']}]"
+    if i.get("strike") and i.get("option_right"):
+        label += f" {i['option_right']}{i['strike']}"
+    label += f" ({i['asset_class']}) [ID:{i['id']}]"
+    return label
+
+inst_map = {_inst_label(i): i for i in all_instruments}
 
 col1, col2 = st.columns([3, 1])
 with col1:
