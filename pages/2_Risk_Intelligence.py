@@ -480,30 +480,48 @@ with tab7:
     rate_rows = [{"Symbol":sym,"Name":prod.get("name",""),
                   "Exchange":prod.get("exchange",""),
                   "Asset Class":prod.get("asset_class",""),
-                  "Initial ($)":prod.get("initial_margin",0),
-                  "Maintenance ($)":prod.get("maintenance_margin",0)}
+                  "Long Initial ($)":   prod.get("long_initial",   prod.get("initial_margin",0)),
+                  "Long Maint. ($)":    prod.get("long_maintenance",prod.get("maintenance_margin",0)),
+                  "Short Initial ($)":  prod.get("short_initial",  prod.get("initial_margin",0)),
+                  "Short Maint. ($)":   prod.get("short_maintenance",prod.get("maintenance_margin",0))}
                  for sym, prod in product_margins.items()]
     st.dataframe(pd.DataFrame(rate_rows), use_container_width=True, hide_index=True)
 
     st.markdown("---")
     st.markdown("### Update a Product Rate")
-    col1,col2,col3 = st.columns(3)
-    with col1:
-        update_sym = st.selectbox("Product", list(product_margins.keys()), key="upd_sym")
-    with col2:
-        current_im = product_margins.get(update_sym,{}).get("initial_margin",0)
-        new_im = st.number_input("New Initial Margin ($)", min_value=0, value=int(current_im), step=25, key="new_im")
-    with col3:
-        current_mm = product_margins.get(update_sym,{}).get("maintenance_margin",0)
-        new_mm = st.number_input("New Maintenance Margin ($)", min_value=0, value=int(current_mm), step=25, key="new_mm")
-    if st.button("💾 Update Rate", type="primary"):
-        params["product_margins"][update_sym]["initial_margin"]    = new_im
-        params["product_margins"][update_sym]["maintenance_margin"] = new_mm
-        params["_meta"]["last_updated"] = str(date.today())
-        params["_meta"]["source"]       = "Manual update via Sentinel UI"
-        save_span_params(params)
-        st.success(f"✅ Updated {update_sym}: Initial ${new_im:,} / Maintenance ${new_mm:,}")
-        st.rerun()
+        col1,col2 = st.columns(2)
+        with col1:
+            update_sym = st.selectbox("Product", list(product_margins.keys()), key="upd_sym")
+        with col2:
+            st.caption("Long and Short rates can differ. For most CME products they are equal.")
+        prod_data = product_margins.get(update_sym, {})
+        col1,col2,col3,col4 = st.columns(4)
+        with col1:
+            new_long_im = st.number_input("Long Initial ($)", min_value=0,
+                value=int(prod_data.get("long_initial", prod_data.get("initial_margin",0))),
+                step=25, key="new_long_im")
+        with col2:
+            new_long_mm = st.number_input("Long Maint. ($)", min_value=0,
+                value=int(prod_data.get("long_maintenance", prod_data.get("maintenance_margin",0))),
+                step=25, key="new_long_mm")
+        with col3:
+            new_short_im = st.number_input("Short Initial ($)", min_value=0,
+                value=int(prod_data.get("short_initial", prod_data.get("initial_margin",0))),
+                step=25, key="new_short_im")
+        with col4:
+            new_short_mm = st.number_input("Short Maint. ($)", min_value=0,
+                value=int(prod_data.get("short_maintenance", prod_data.get("maintenance_margin",0))),
+                step=25, key="new_short_mm")
+        if st.button("💾 Update Rate", type="primary"):
+            params["product_margins"][update_sym]["long_initial"]     = new_long_im
+            params["product_margins"][update_sym]["long_maintenance"]  = new_long_mm
+            params["product_margins"][update_sym]["short_initial"]    = new_short_im
+            params["product_margins"][update_sym]["short_maintenance"] = new_short_mm
+            params["_meta"]["last_updated"] = str(date.today())
+            params["_meta"]["source"]       = "Manual update via Sentinel UI"
+            save_span_params(params)
+            st.success(f"✅ Updated {update_sym}: Long IM ${new_long_im:,} / Short IM ${new_short_im:,}")
+            st.rerun()
 
     st.markdown("---")
     st.markdown("### Add New Product")
