@@ -141,9 +141,13 @@ def calculate_pretrade_margin_impact(
     # ── OPTIONS ──────────────────────────────────────────────────────────
     elif asset_class == "OPT":
         # Determine if this is an option on a futures product
-        underlying_sym = (inst.get("underlying_symbol") or symbol).upper() if inst else symbol.upper()
+        # underlying_symbol in security master determines routing
+        # If underlying_symbol is set to a futures product (ES, GC etc) → SPAN
+        # If underlying_symbol is empty or an equity → CBOE margin-estimator
+        underlying_sym = (inst.get("underlying_symbol") or "").upper() if inst else ""
         futures_opt_underlyings = params.get("futures_option_underlyings", [])
-        is_futures_option = underlying_sym in futures_opt_underlyings
+        # Only route to SPAN if underlying_symbol is explicitly set to a futures product
+        is_futures_option = bool(underlying_sym) and underlying_sym in futures_opt_underlyings
 
         if is_futures_option:
             # SPAN options margin from option_margins table
@@ -366,7 +370,14 @@ if asset_class == "OPT":
                                        value=float(inst.get("strike") or 0.0),
                                        step=0.5, key="order_strike")
     with col3:
-        is_short_opt = st.checkbox("Short Option (selling)?", key="order_short_opt")
+        # Auto-detect from side — SELL = short option
+        auto_short = order_side == "SELL"
+        is_short_opt = st.checkbox("Short Option (selling)?",
+                                   value=auto_short,
+                                   key="order_short_opt",
+                                   help="Auto-set from Side selection. Override if needed.")
+        if auto_short and not is_short_opt:
+            st.caption("⚠️ Side is SELL but Short Option unchecked")
 
 if asset_class in ["FUT", "OPT"]:
     order_expiry = st.text_input("Expiry (YYYYMMDD)",
