@@ -36,24 +36,41 @@ def positions_to_span_format(positions: list) -> list:
     return span_positions
 
 
+def _position_key(p: dict) -> str:
+    """
+    Unique key for a position — uses instrument_id if available,
+    else symbol + expiry to distinguish different maturities.
+    """
+    if p.get("instrument_id"):
+        return f"id:{p['instrument_id']}"
+    return f"{p['symbol']}:{p.get('expiry') or ''}"
+
+
 def net_positions(existing: list, new_symbol: str, new_qty_signed: float,
-                  new_price: float) -> list:
+                  new_price: float, new_instrument_id: int = None,
+                  new_expiry: str = None) -> list:
     """
     Merge a new order into existing positions.
+    Keys by instrument_id (exact contract) to avoid netting different maturities.
     new_qty_signed: positive = BUY, negative = SELL
-    Returns combined list with quantities netted for same symbol.
     """
-    combined = {p["symbol"]: dict(p) for p in existing}
+    combined = {_position_key(p): dict(p) for p in existing}
 
-    if new_symbol in combined:
-        existing_qty = combined[new_symbol]["quantity"]
-        combined[new_symbol]["quantity"] = existing_qty + new_qty_signed
-        combined[new_symbol]["price"]    = new_price
-        # Remove if flat
-        if combined[new_symbol]["quantity"] == 0:
-            del combined[new_symbol]
+    # Key for the new order
+    if new_instrument_id:
+        new_key = f"id:{new_instrument_id}"
     else:
-        combined[new_symbol] = {
+        new_key = f"{new_symbol}:{new_expiry or ''}"
+
+    if new_key in combined:
+        existing_qty = combined[new_key]["quantity"]
+        combined[new_key]["quantity"] = existing_qty + new_qty_signed
+        combined[new_key]["price"]    = new_price
+        # Remove if flat
+        if combined[new_key]["quantity"] == 0:
+            del combined[new_key]
+    else:
+        combined[new_key] = {
             "symbol":          new_symbol,
             "quantity":        new_qty_signed,
             "price":           new_price,
@@ -94,7 +111,10 @@ def calculate_pretrade_margin_impact(
 
         # Combined portfolio margin (existing + new order netted)
         signed_qty    = quantity if side == "BUY" else -quantity
-        combined_span = net_positions(current_span, symbol, signed_qty, price)
+        new_inst_id   = inst.get("id") if inst else None
+        new_expiry_val = inst.get("expiry") if inst else None
+        combined_span = net_positions(current_span, symbol, signed_qty, price,
+                                      new_inst_id, new_expiry_val)
         combined_result = calculate_portfolio_margin(combined_span)
 
         current_total  = current_result.get("net_futures_margin", 0)
@@ -110,9 +130,16 @@ def calculate_pretrade_margin_impact(
         per_contract_mm = prod.get(mm_key) or prod.get("maintenance_margin", 0)
 
         # Net position after trade
+        # Match by instrument_id if available, else symbol+expiry
+        inst_id_val = inst.get("id") if inst else None
+        expiry_val  = inst.get("expiry") if inst else None
+        def _matches_instrument(p):
+            if inst_id_val and p.get("instrument_id"):
+                return p["instrument_id"] == inst_id_val
+            return p["symbol"] == symbol and (p.get("expiry") or "") == (expiry_val or "")
         existing_qty = sum(
             (p["quantity"] if p.get("side", "LONG").upper() in ("LONG", "BUY") else -p["quantity"])
-            for p in existing_positions if p["symbol"] == symbol
+            for p in existing_positions if _matches_instrument(p)
         )
         net_qty = existing_qty + (quantity if side == "BUY" else -quantity)
 
