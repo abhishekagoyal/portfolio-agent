@@ -18,31 +18,38 @@ FUTURES_ASSET_CLASSES = ['equity_futures', 'commodity_futures', 'fixed_income', 
 REG_T_INITIAL         = 0.50
 REG_T_MAINTENANCE     = 0.25
 
-def calculate_futures_margin(symbol: str, quantity: int, params: dict) -> dict:
+def calculate_futures_margin(symbol: str, quantity: int, params: dict,
+                             side: str = "LONG") -> dict:
     """
-    Per-product SPAN margin — uses fixed dollar initial/maintenance from product_margins.
+    Per-product SPAN margin using long/short specific rates.
     Falls back to scanning range percentage for unknown products.
     """
-    sym  = symbol.upper()
-    prod = params.get('product_margins', {}).get(sym)
+    sym      = symbol.upper()
+    prod     = params.get('product_margins', {}).get(sym)
+    is_long  = str(side).upper() in ("LONG", "BUY")
+    contracts = abs(quantity)
 
     if prod:
-        # Official per-contract dollar margin
-        contracts       = abs(quantity)
-        initial         = prod['initial_margin']     * contracts
-        maintenance     = prod['maintenance_margin'] * contracts
-        method          = 'SPAN (per-contract)'
-        calc_detail     = (f"{contracts} contracts × ${prod['initial_margin']:,} "
-                           f"= ${initial:,.2f} initial / "
-                           f"${prod['maintenance_margin']:,} = ${maintenance:,.2f} maint.")
+        im_key  = 'long_initial'       if is_long else 'short_initial'
+        mm_key  = 'long_maintenance'   if is_long else 'short_maintenance'
+        # Fall back to legacy keys if long/short specific not present
+        im_rate = prod.get(im_key) or prod.get('initial_margin', 0)
+        mm_rate = prod.get(mm_key) or prod.get('maintenance_margin', 0)
+        initial     = im_rate * contracts
+        maintenance = mm_rate * contracts
+        method      = f'SPAN (per-contract, {side})'
+        calc_detail = (f"{contracts} contracts × ${im_rate:,} "
+                       f"= ${initial:,.2f} initial / "
+                       f"${mm_rate:,} = ${maintenance:,.2f} maint. [{side}]")
     else:
-        # Fallback — percentage of notional (old method)
-        asset_class     = get_asset_class(sym, params)
-        scan_range      = params['fallback_scanning_ranges'].get(asset_class, 0.10)
-        initial         = 0   # notional not available here — caller must pass position_value
-        maintenance     = 0
-        method          = 'SPAN (fallback %)'
-        calc_detail     = f"No per-product rate for {sym} — fallback to scanning range"
+        asset_class = get_asset_class(sym, params)
+        scan_range  = params['fallback_scanning_ranges'].get(asset_class, 0.10)
+        initial     = 0
+        maintenance = 0
+        im_rate     = 0
+        mm_rate     = 0
+        method      = 'SPAN (fallback %)'
+        calc_detail = f"No per-product rate for {sym} — fallback to scanning range"
 
     return {
         'symbol':             sym,
@@ -51,8 +58,8 @@ def calculate_futures_margin(symbol: str, quantity: int, params: dict) -> dict:
         'maintenance_margin': round(maintenance, 2),
         'margin':             round(initial, 2),
         'calc_detail':        calc_detail,
-        'per_contract_im':    prod['initial_margin']     if prod else None,
-        'per_contract_mm':    prod['maintenance_margin'] if prod else None,
+        'per_contract_im':    im_rate if prod else None,
+        'per_contract_mm':    mm_rate if prod else None,
     }
 
 def calculate_futures_margin_from_notional(symbol: str, position_value: float, params: dict) -> dict:

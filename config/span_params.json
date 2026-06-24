@@ -1,99 +1,183 @@
 {
   "_meta": {
-    "description": "SPAN margin parameters — update product_margins from CME clearing advisories",
-    "last_updated": "2026-06-20",
+    "description": "SPAN margin parameters — update from CME clearing advisories",
+    "last_updated": "2026-06-23",
     "source": "CME Group Performance Bond advisories (manual)"
   },
 
   "product_margins": {
     "ES": {
-      "name":                "E-mini S&P 500",
-      "exchange":            "CME",
-      "asset_class":         "equity_futures",
-      "initial_margin":      14625,
-      "maintenance_margin":  13295,
-      "currency":            "USD"
+      "name":                 "E-mini S&P 500",
+      "exchange":             "CME",
+      "asset_class":          "equity_futures",
+      "long_initial":         14625,
+      "long_maintenance":     13295,
+      "short_initial":        14625,
+      "short_maintenance":    13295,
+      "currency":             "USD"
     },
     "NQ": {
-      "name":                "E-mini NASDAQ-100",
-      "exchange":            "CME",
-      "asset_class":         "equity_futures",
-      "initial_margin":      21450,
-      "maintenance_margin":  19500,
-      "currency":            "USD"
+      "name":                 "E-mini NASDAQ-100",
+      "exchange":             "CME",
+      "asset_class":          "equity_futures",
+      "long_initial":         21450,
+      "long_maintenance":     19500,
+      "short_initial":        21450,
+      "short_maintenance":    19500,
+      "currency":             "USD"
     },
     "YM": {
-      "name":                "E-mini Dow Jones",
-      "exchange":            "CBOT",
-      "asset_class":         "equity_futures",
-      "initial_margin":      9900,
-      "maintenance_margin":  9000,
-      "currency":            "USD"
+      "name":                 "E-mini Dow Jones",
+      "exchange":             "CBOT",
+      "asset_class":          "equity_futures",
+      "long_initial":         9900,
+      "long_maintenance":     9000,
+      "short_initial":        9900,
+      "short_maintenance":    9000,
+      "currency":             "USD"
     },
     "GC": {
-      "name":                "Gold",
-      "exchange":            "COMEX",
-      "asset_class":         "commodity_futures",
-      "initial_margin":      11000,
-      "maintenance_margin":  10000,
-      "currency":            "USD"
+      "name":                 "Gold",
+      "exchange":             "COMEX",
+      "asset_class":          "commodity_futures",
+      "long_initial":         11000,
+      "long_maintenance":     10000,
+      "short_initial":        11000,
+      "short_maintenance":    10000,
+      "currency":             "USD"
     },
     "SI": {
-      "name":                "Silver",
-      "exchange":            "COMEX",
-      "asset_class":         "commodity_futures",
-      "initial_margin":      12000,
-      "maintenance_margin":  11000,
-      "currency":            "USD"
+      "name":                 "Silver",
+      "exchange":             "COMEX",
+      "asset_class":          "commodity_futures",
+      "long_initial":         12000,
+      "long_maintenance":     11000,
+      "short_initial":        12000,
+      "short_maintenance":    11000,
+      "currency":             "USD"
     },
     "CL": {
-      "name":                "Crude Oil WTI",
-      "exchange":            "NYMEX",
-      "asset_class":         "commodity_futures",
-      "initial_margin":      6500,
-      "maintenance_margin":  5900,
-      "currency":            "USD"
+      "name":                 "Crude Oil WTI",
+      "exchange":             "NYMEX",
+      "asset_class":          "commodity_futures",
+      "long_initial":         6500,
+      "long_maintenance":     5900,
+      "short_initial":        6500,
+      "short_maintenance":    5900,
+      "currency":             "USD"
     },
     "HO": {
-      "name":                "Heating Oil",
-      "exchange":            "NYMEX",
-      "asset_class":         "commodity_futures",
-      "initial_margin":      8250,
-      "maintenance_margin":  7500,
-      "currency":            "USD"
+      "name":                 "Heating Oil",
+      "exchange":             "NYMEX",
+      "asset_class":          "commodity_futures",
+      "long_initial":         8250,
+      "long_maintenance":     7500,
+      "short_initial":        8250,
+      "short_maintenance":    7500,
+      "currency":             "USD"
     },
     "ZB": {
-      "name":                "US Treasury Bond",
-      "exchange":            "CBOT",
-      "asset_class":         "fixed_income",
-      "initial_margin":      4400,
-      "maintenance_margin":  4000,
-      "currency":            "USD"
+      "name":                 "US Treasury Bond",
+      "exchange":             "CBOT",
+      "asset_class":          "fixed_income",
+      "long_initial":         4400,
+      "long_maintenance":     4000,
+      "short_initial":        4400,
+      "short_maintenance":    4000,
+      "currency":             "USD"
     },
     "ZN": {
-      "name":                "10-Year T-Note",
-      "exchange":            "CBOT",
-      "asset_class":         "fixed_income",
-      "initial_margin":      2200,
-      "maintenance_margin":  2000,
-      "currency":            "USD"
+      "name":                 "10-Year T-Note",
+      "exchange":             "CBOT",
+      "asset_class":          "fixed_income",
+      "long_initial":         2200,
+      "long_maintenance":     2000,
+      "short_initial":        2200,
+      "short_maintenance":    2000,
+      "currency":             "USD"
     },
     "BTC": {
-      "name":                "Bitcoin Futures",
-      "exchange":            "CME",
-      "asset_class":         "crypto",
-      "initial_margin":      98000,
-      "maintenance_margin":  89000,
-      "currency":            "USD"
+      "name":                 "Bitcoin Futures",
+      "exchange":             "CME",
+      "asset_class":          "crypto",
+      "long_initial":         98000,
+      "long_maintenance":     89000,
+      "short_initial":        98000,
+      "short_maintenance":    89000,
+      "currency":             "USD"
     },
     "ETH": {
-      "name":                "Ether Futures",
-      "exchange":            "CME",
-      "asset_class":         "crypto",
-      "initial_margin":      8500,
-      "maintenance_margin":  7700,
-      "currency":            "USD"
+      "name":                 "Ether Futures",
+      "exchange":             "CME",
+      "asset_class":          "crypto",
+      "long_initial":         8500,
+      "long_maintenance":     7700,
+      "short_initial":        8500,
+      "short_maintenance":    7700,
+      "currency":             "USD"
     }
+  },
+
+  "option_margins": {
+    "ES": {
+      "name":               "E-mini S&P 500 Options",
+      "underlying":         "ES",
+      "long_initial":       0,
+      "long_maintenance":   0,
+      "short_initial":      3000,
+      "short_maintenance":  2700,
+      "som_per_contract":   3000,
+      "currency":           "USD",
+      "note":               "Long options: 100% premium. Short options: per-contract SOM."
+    },
+    "NQ": {
+      "name":               "E-mini NASDAQ-100 Options",
+      "underlying":         "NQ",
+      "long_initial":       0,
+      "long_maintenance":   0,
+      "short_initial":      4500,
+      "short_maintenance":  4000,
+      "som_per_contract":   4500,
+      "currency":           "USD"
+    },
+    "GC": {
+      "name":               "Gold Options",
+      "underlying":         "GC",
+      "long_initial":       0,
+      "long_maintenance":   0,
+      "short_initial":      1500,
+      "short_maintenance":  1350,
+      "som_per_contract":   1500,
+      "currency":           "USD"
+    },
+    "CL": {
+      "name":               "Crude Oil Options",
+      "underlying":         "CL",
+      "long_initial":       0,
+      "long_maintenance":   0,
+      "short_initial":      1200,
+      "short_maintenance":  1100,
+      "som_per_contract":   1200,
+      "currency":           "USD"
+    },
+    "ZB": {
+      "name":               "T-Bond Options",
+      "underlying":         "ZB",
+      "long_initial":       0,
+      "long_maintenance":   0,
+      "short_initial":      800,
+      "short_maintenance":  720,
+      "som_per_contract":   800,
+      "currency":           "USD"
+    }
+  },
+
+  "equity_option_margins": {
+    "long_initial":          100,
+    "long_maintenance":      100,
+    "short_naked_initial":   20,
+    "short_naked_maintenance": 20,
+    "note":                  "Long: 100% of premium. Short naked: 20% of underlying notional."
   },
 
   "fallback_scanning_ranges": {
@@ -105,11 +189,11 @@
   },
 
   "spread_credits": {
-    "ES_NQ": 0.70,
-    "ES_YM": 0.75,
-    "GC_SI": 0.70,
-    "CL_HO": 0.80,
-    "ZN_ZB": 0.85,
+    "ES_NQ":  0.70,
+    "ES_YM":  0.75,
+    "GC_SI":  0.70,
+    "CL_HO":  0.80,
+    "ZN_ZB":  0.85,
     "BTC_ETH": 0.65
   },
 
@@ -136,5 +220,7 @@
     "ZB":  "fixed_income",
     "BTC": "crypto",
     "ETH": "crypto"
-  }
+  },
+
+  "futures_option_underlyings": ["ES", "NQ", "YM", "GC", "SI", "CL", "HO", "ZB", "ZN", "BTC", "ETH"]
 }

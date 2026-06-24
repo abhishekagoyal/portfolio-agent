@@ -68,7 +68,8 @@ def calculate_pretrade_margin_impact(
     side: str, price: float,
     option_right: str = None,
     is_short_option: bool = False,
-    existing_positions: list = None
+    existing_positions: list = None,
+    inst: dict = None
 ) -> dict:
     """
     Calculate the MARGINAL margin impact of a new order against the existing portfolio.
@@ -102,8 +103,11 @@ def calculate_pretrade_margin_impact(
 
         # Per-contract rate for display
         prod = params.get("product_margins", {}).get(symbol.upper(), {})
-        per_contract_im = prod.get("initial_margin", 0)
-        per_contract_mm = prod.get("maintenance_margin", 0)
+        is_long_side = side in ("BUY", "LONG")
+        im_key = "long_initial"     if is_long_side else "short_initial"
+        mm_key = "long_maintenance" if is_long_side else "short_maintenance"
+        per_contract_im = prod.get(im_key) or prod.get("initial_margin", 0)
+        per_contract_mm = prod.get(mm_key) or prod.get("maintenance_margin", 0)
 
         # Net position after trade
         existing_qty = sum(
@@ -134,40 +138,60 @@ def calculate_pretrade_margin_impact(
             "net_qty_after":       net_qty,
         }
 
-    # ── OPTIONS ON FUTURES (SPAN SOM) ────────────────────────────────────
-    elif asset_class == "OPT" and symbol.upper() in params.get("asset_class_map", {}):
-        ac_key   = params["asset_class_map"].get(symbol.upper(), "equity_futures")
-        som_key  = ac_key + "_options" if "options" not in ac_key else ac_key
-        som_rate = params.get("short_option_minimum", {}).get(som_key, 50)
-        if is_short_option:
-            im     = quantity * som_rate
-            mm     = im * 0.90
-            detail = f"{quantity:.0f} contracts × ${som_rate} SOM = ${im:,.2f}"
-            method = "SPAN (SOM)"
-        else:
-            im     = abs(position_value)
-            mm     = im
-            detail = f"Long option: 100% premium = ${im:,.2f}"
-            method = "SPAN (long premium)"
-        return {"initial_margin": round(im, 2), "maintenance_margin": round(mm, 2),
-                "margin_impact": round(im, 2), "method": method,
-                "calc_detail": detail, "net_qty_after": None}
-
-    # ── EQUITY OPTIONS ────────────────────────────────────────────────────
+    # ── OPTIONS ──────────────────────────────────────────────────────────
     elif asset_class == "OPT":
-        if not is_short_option:
-            im     = abs(position_value)
-            mm     = im
-            detail = f"Long option: 100% of premium ${abs(position_value):,.2f}"
-            method = "Reg T (long option)"
+        # Determine if this is an option on a futures product
+        underlying_sym = (inst.get("underlying_symbol") or symbol).upper() if inst else symbol.upper()
+        futures_opt_underlyings = params.get("futures_option_underlyings", [])
+        is_futures_option = underlying_sym in futures_opt_underlyings
+
+        if is_futures_option:
+            # SPAN options margin from option_margins table
+            opt_margins = params.get("option_margins", {}).get(underlying_sym, {})
+            if is_short_option:
+                im_rate = opt_margins.get("short_initial",
+                          opt_margins.get("som_per_contract", 3000))
+                mm_rate = opt_margins.get("short_maintenance", im_rate * 0.90)
+                im      = quantity * im_rate
+                mm      = quantity * mm_rate
+                detail  = (f"SPAN short futures option on {underlying_sym}: "
+                           f"{quantity:.0f} contracts × ${im_rate:,} = ${im:,.2f} IM | "
+                           f"${mm_rate:,} = ${mm:,.2f} MM")
+                method  = "SPAN (short futures option)"
+            else:
+                im     = abs(position_value)
+                mm     = 0
+                detail = (f"SPAN long futures option: 100% of premium "
+                          f"${abs(position_value):,.2f} (max loss = premium paid)")
+                method = "SPAN (long futures option)"
+            return {"initial_margin": round(im, 2), "maintenance_margin": round(mm, 2),
+                    "margin_impact": round(im, 2), "method": method,
+                    "calc_detail": detail, "net_qty_after": None}
         else:
-            im     = abs(position_value) * 0.20
-            mm     = im
-            detail = f"Short naked option: 20% × ${abs(position_value):,.2f} = ${im:,.2f}"
-            method = "Reg T (short naked option)"
-        return {"initial_margin": round(im, 2), "maintenance_margin": round(mm, 2),
-                "margin_impact": round(im, 2), "method": method,
-                "calc_detail": detail, "net_qty_after": None}
+            # Equity option — use tastyware/margin-estimator (CBOE rules)
+            from core.margin_estimator_integration import calculate_equity_option_margin
+            strike      = float(inst.get("strike") or 0) if inst else 0
+            expiry      = str(inst.get("expiry") or "") if inst else ""
+            opt_right   = option_right or (inst.get("option_right") if inst else "C") or "C"
+            # quantity: positive=long, negative=short
+            signed_qty  = int(quantity) if not is_short_option else -int(quantity)
+            result      = calculate_equity_option_margin(
+                symbol           = symbol,
+                underlying_price = price,   # use current price as underlying proxy
+                option_right     = opt_right,
+                strike           = strike or price,
+                expiry           = expiry,
+                quantity         = signed_qty,
+                option_price     = price,   # option premium = entered price
+                inst             = inst,
+            )
+            return {"initial_margin":     result["initial_margin"],
+                    "maintenance_margin": result["maintenance_margin"],
+                    "margin_impact":      result["initial_margin"],
+                    "method":             result["method"],
+                    "calc_detail":        result["calc_detail"],
+                    "cash_margin":        result.get("cash_margin"),
+                    "net_qty_after":      None}
 
     # ── CRYPTO ───────────────────────────────────────────────────────────
     elif asset_class == "CRYPTO":
@@ -363,7 +387,7 @@ if run_check:
             margin = calculate_pretrade_margin_impact(
                 symbol, asset_class, order_qty, order_side,
                 order_price, option_right, is_short_opt,
-                existing_positions
+                existing_positions, inst
             )
             bp_after  = bp["available_buying_power"] - margin["margin_impact"]
             bp_change = -margin["margin_impact"]
@@ -388,11 +412,16 @@ if run_check:
 
         # Margin metrics
         st.markdown("#### Margin Requirement")
-        m1, m2, m3, m4 = st.columns(4)
+        m1, m2, m3, m4, m5 = st.columns(5)
         m1.metric("Marginal IM Impact",  f"${margin['margin_impact']:+,.2f}")
         m2.metric("Initial Margin (IM)", f"${margin['initial_margin']:,.2f}")
         m3.metric("Maint. Margin (MM)",  f"${margin['maintenance_margin']:,.2f}")
-        m4.metric("Method",              margin["method"])
+        if margin.get("cash_margin") is not None:
+            m4.metric("Cash Account Req",f"${margin['cash_margin']:,.2f}",
+                      help="Margin required in a cash (non-margin) account")
+        else:
+            m4.metric("Cash Account Req", "N/A")
+        m5.metric("Method", margin["method"])
         st.caption(f"📐 {margin['calc_detail']}")
 
         # Portfolio margin waterfall for futures

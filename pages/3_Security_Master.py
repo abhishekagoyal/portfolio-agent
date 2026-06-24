@@ -22,7 +22,7 @@ ASSET_CLASSES = ["STK", "FUT", "OPT", "CRYPTO", "BOND", "SWAP"]
 MARGIN_METHODS = ["REGT", "SPAN", "BLACK_SCHOLES", "IBKR", "ISDA_SIMM"]
 EXCHANGES      = ["NYSE", "NASDAQ", "CME", "CBOT", "NYMEX", "COMEX", "CBOE", "IBKR", "OTHER"]
 
-tab1, tab2 = st.tabs(["📋 View & Search", "➕ Add Instrument"])
+tab1, tab2, tab3 = st.tabs(["📋 View & Search", "➕ Add Instrument", "✏️ Edit Instrument"])
 
 # ── TAB 1: VIEW & SEARCH ────────────────────────────────────────────────
 with tab1:
@@ -231,6 +231,119 @@ with tab2:
                 "multiplier":        new_multiplier or None,
             }
             ok, msg = add_instrument(payload)
+            if ok:
+                st.success(f"✅ {msg}")
+                st.rerun()
+            else:
+                st.error(f"❌ {msg}")
+
+# ── TAB 3: EDIT INSTRUMENT ──────────────────────────────────────────────
+with tab3:
+    st.markdown("### Edit Existing Instrument")
+    st.caption("Select an instrument and update any of its attributes.")
+
+    all_insts = search_instruments("", "All")
+    if not all_insts:
+        st.info("No instruments in Security Master yet.")
+    else:
+        edit_options = {
+            f"{i['symbol']} — {i['name'] or ''} ({i['asset_class']})": i
+            for i in all_insts
+        }
+        selected_edit = st.selectbox("Select Instrument to Edit",
+                                     list(edit_options.keys()), key="edit_sel")
+        ei = edit_options[selected_edit]
+
+        st.markdown("---")
+        st.markdown(f"**Editing: {ei['symbol']} (ID: {ei['id']})**")
+
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            e_name = st.text_input("Name", value=ei.get("name") or "", key="e_name")
+        with col2:
+            e_exch = st.selectbox("Exchange", EXCHANGES,
+                                  index=EXCHANGES.index(ei["exchange"]) if ei.get("exchange") in EXCHANGES else 0,
+                                  key="e_exch")
+        with col3:
+            currencies = ["USD","EUR","GBP","JPY","INR"]
+            e_ccy = st.selectbox("Currency", currencies,
+                                 index=currencies.index(ei["currency"]) if ei.get("currency") in currencies else 0,
+                                 key="e_ccy")
+
+        col1, col2 = st.columns(2)
+        with col1:
+            e_mm = st.selectbox("Margin Method", MARGIN_METHODS,
+                                index=MARGIN_METHODS.index(ei["margin_method"]) if ei.get("margin_method") in MARGIN_METHODS else 0,
+                                key="e_mm")
+        with col2:
+            e_conid = st.number_input("IBKR ConID", min_value=0,
+                                      value=int(ei.get("conid") or 0), step=1, key="e_conid")
+
+        # Futures fields
+        if ei.get("asset_class") == "FUT":
+            st.markdown("**Futures Contract Specs**")
+            col1, col2, col3, col4, col5 = st.columns(5)
+            with col1:
+                e_cme = st.text_input("CME Code", value=ei.get("cme_product_code") or "", key="e_cme")
+            with col2:
+                e_cs = st.number_input("Contract Size", min_value=0.0,
+                                       value=float(ei.get("contract_size") or 0), step=1.0, key="e_cs")
+            with col3:
+                e_ts = st.number_input("Tick Size", min_value=0.0,
+                                       value=float(ei.get("tick_size") or 0), format="%.4f", key="e_ts")
+            with col4:
+                e_tv = st.number_input("Tick Value ($)", min_value=0.0,
+                                       value=float(ei.get("tick_value") or 0), step=0.01, key="e_tv")
+            with col5:
+                e_exp = st.text_input("Expiry (YYYYMMDD)", value=ei.get("expiry") or "", key="e_exp")
+
+        # Options fields
+        if ei.get("asset_class") == "OPT":
+            st.markdown("**Options Contract Specs**")
+            col1, col2, col3, col4, col5 = st.columns(5)
+            with col1:
+                e_und = st.text_input("Underlying", value=ei.get("underlying_symbol") or "", key="e_und")
+            with col2:
+                e_str = st.number_input("Strike ($)", min_value=0.0,
+                                        value=float(ei.get("strike") or 0), step=0.5, key="e_str")
+            with col3:
+                rights = ["C", "P"]
+                e_right = st.selectbox("C/P", rights,
+                                       index=rights.index(ei["option_right"]) if ei.get("option_right") in rights else 0,
+                                       key="e_right")
+            with col4:
+                e_mult = st.number_input("Multiplier", min_value=0.0,
+                                         value=float(ei.get("multiplier") or 100), step=1.0, key="e_mult")
+            with col5:
+                e_exp = st.text_input("Expiry (YYYYMMDD)", value=ei.get("expiry") or "", key="e_exp_opt")
+
+        st.markdown("")
+        if st.button("💾 Save Changes", type="primary", key="save_edit"):
+            updates = {
+                "name":          e_name or None,
+                "exchange":      e_exch,
+                "currency":      e_ccy,
+                "margin_method": e_mm,
+                "conid":         int(e_conid) if e_conid else None,
+            }
+            if ei.get("asset_class") == "FUT":
+                updates.update({
+                    "cme_product_code": e_cme or None,
+                    "contract_size":    e_cs or None,
+                    "tick_size":        e_ts or None,
+                    "tick_value":       e_tv or None,
+                    "expiry":           e_exp or None,
+                })
+            if ei.get("asset_class") == "OPT":
+                updates.update({
+                    "underlying_symbol": e_und or None,
+                    "strike":            e_str or None,
+                    "option_right":      e_right,
+                    "multiplier":        e_mult or None,
+                    "expiry":            e_exp or None,
+                })
+            from core.security_master import update_instrument
+            ok, msg = update_instrument(ei["id"], updates)
             if ok:
                 st.success(f"✅ {msg}")
                 st.rerun()

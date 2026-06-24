@@ -533,6 +533,44 @@ with tab7:
             st.rerun()
 
     st.markdown("---")
+    st.markdown("### Options Margins (SPAN — per contract)")
+    st.caption("Short options on futures use per-contract SPAN margin. Long options pay 100% of premium.")
+    opt_margins = params.get("option_margins", {})
+    if opt_margins:
+        opt_rows = [{"Underlying": sym,
+                     "Name": v.get("name",""),
+                     "Long IM ($)": "100% of premium",
+                     "Short IM ($/contract)": f"${v.get('short_initial',0):,}",
+                     "Short MM ($/contract)": f"${v.get('short_maintenance',0):,}",
+                     "SOM ($/contract)": f"${v.get('som_per_contract',0):,}"}
+                    for sym, v in opt_margins.items()]
+        st.dataframe(pd.DataFrame(opt_rows), use_container_width=True, hide_index=True)
+
+        st.markdown("**Update Options Margin Rate**")
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            upd_opt_sym = st.selectbox("Product", list(opt_margins.keys()), key="upd_opt_sym")
+        with col2:
+            cur_opt_im = opt_margins.get(upd_opt_sym, {}).get("short_initial", 0)
+            new_opt_im = st.number_input("Short Initial ($/contract)", min_value=0,
+                                          value=int(cur_opt_im), step=25, key="new_opt_im")
+        with col3:
+            cur_opt_mm = opt_margins.get(upd_opt_sym, {}).get("short_maintenance", 0)
+            new_opt_mm = st.number_input("Short Maintenance ($/contract)", min_value=0,
+                                          value=int(cur_opt_mm), step=25, key="new_opt_mm")
+        if st.button("💾 Update Options Rate", type="primary", key="upd_opt_btn"):
+            params["option_margins"][upd_opt_sym]["short_initial"]     = new_opt_im
+            params["option_margins"][upd_opt_sym]["short_maintenance"]  = new_opt_mm
+            params["option_margins"][upd_opt_sym]["som_per_contract"]   = new_opt_im
+            params["_meta"]["last_updated"] = str(date.today())
+            params["_meta"]["source"]       = "Manual update via Sentinel UI"
+            save_span_params(params)
+            st.success(f"✅ Updated {upd_opt_sym} options: Short IM ${new_opt_im:,} / MM ${new_opt_mm:,}")
+            st.rerun()
+    else:
+        st.info("No option margins configured yet.")
+
+    st.markdown("---")
     st.markdown("### Spread Credits")
     spread_rows = [{"Pair":pair,"Credit Rate":f"{rate:.0%}"}
                    for pair, rate in params.get("spread_credits",{}).items()]
@@ -540,6 +578,9 @@ with tab7:
 
     st.markdown("### Reg T Rates")
     reg_t = params.get("reg_t",{})
-    col1,col2 = st.columns(2)
-    col1.metric("Initial Margin",    f"{reg_t.get('initial',0.50):.0%}")
-    col2.metric("Maintenance Margin",f"{reg_t.get('maintenance',0.25):.0%}")
+    eq_opt = params.get("equity_option_margins", {})
+    col1,col2,col3,col4 = st.columns(4)
+    col1.metric("Equity Initial Margin",    f"{reg_t.get('initial',0.50):.0%}")
+    col2.metric("Equity Maintenance Margin",f"{reg_t.get('maintenance',0.25):.0%}")
+    col3.metric("Long Option",              "100% of premium")
+    col4.metric("Short Naked Option",       f"{eq_opt.get('short_naked_initial',0.20):.0%} of notional")
